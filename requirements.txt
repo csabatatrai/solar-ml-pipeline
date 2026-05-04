@@ -1,0 +1,32 @@
+# ==========================================
+# SOLAR-ETL-SIMULATION - REQUIREMENTS.TXT
+# ==========================================
+
+# --- 1. Adatkinyerés (Extract) ---
+# Az OpenMeteo API-val való kommunikációhoz és a nyers JSON adatok letöltéséhez.
+requests==2.33.1
+
+# --- 2. Adatfeldolgozás és Betöltés (Transform & Load) ---
+# A letöltött adatok órás felbontásúvá alakításához, tisztításához és táblázatos kezeléséhez.
+pandas==2.3.3
+# Analitikus adatbázis: column-oriented tároló, natív TIMESTAMPTZ, közvetlen DataFrame I/O.
+# Kiváltja a SQLite + SQLAlchemy ORM kombinációt.
+duckdb==1.5.2
+
+# --- 3. Mérnöki Szimuláció és Modellezés ---
+# A fotovoltaikus hozamszámításhoz (DC/AC teljesítmény, inverter és cellahőmérséklet számítások).
+pvlib==0.15.1
+# A pvlib által igényelt és a notebook numerikus számításaihoz közvetlenül használt könyvtár.
+numpy==2.2.6
+
+# --- 4. Adatvizualizáció ---
+# Az (rész)eredmények és a statisztikai jellemzők grafikus ábrázolásához.
+matplotlib==3.10.9
+seaborn==0.13.2
+
+# --- 5. Fejlesztői Környezet ---
+# A Jupyter Notebook futtatásához és az elemzések interaktív megjelenítéséhez.
+jupyter==1.1.1
+notebook==7.5.5
+# A conda/venv környezet Jupyter-kernelként való regisztrálásához.
+ipykernel==7.2.0

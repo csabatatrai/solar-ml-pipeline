@@ -1,0 +1,37 @@
+# Python cache fájlok
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtuális környezetek (biztonsági okokból)
+.venv/
+env/
+venv/
+ENV/
+
+# Jupyter Notebook háttérfájlok
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/*
+
+# Adatbázis fájlok (A LETÖLTÖTT ADAT NEM MEGY FEL A GITHUBRA!)
+*.db
+*.sqlite
+*.sqlite3
+*.duckdb
+
+# Generált képfájlok (a notebook inline megjeleníti, külön fájl nem szükséges)
+*.png
+
+# IDE (VS Code, PyCharm) beállítások
+.vscode/
+.idea/
+
+# Operációs rendszer fájlok
+.DS_Store
+Thumbs.db
+
+# Exportált notebook kimenet, nem verziókezelt artifact!!!
+*.html
+
+# A titkos recept
+Claude.md
