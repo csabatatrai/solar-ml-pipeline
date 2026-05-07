@@ -14,6 +14,13 @@ dependencies:
   # pip-ből: PyPI-ről telepítve (conda-forge build helyett konzisztencia miatt)
   - pip:
     - duckdb==1.5.2
+    # ML Pipeline
+    - darts==0.44.1
+    - scikit-learn==1.7.2
+    # PyTorch backend (GPU, CUDA 12.4) – CPU esetén hagyd el az --extra-index-url sort
+    # és csak: torch>=2.6.0
+    - --extra-index-url https://download.pytorch.org/whl/cu124
+    - torch==2.6.0+cu124
 
   # Szimuláció és Modellezés
   - pvlib=0.15.1

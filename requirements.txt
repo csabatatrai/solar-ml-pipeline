@@ -19,7 +19,19 @@ pvlib==0.15.1
 # A pvlib által igényelt és a notebook numerikus számításaihoz közvetlenül használt könyvtár.
 numpy==2.2.6
 
-# --- 4. Adatvizualizáció ---
+# --- 4. ML Pipeline (TFT Day-Ahead Előrejelzés) ---
+# Temporal Fusion Transformer + valószínűségi backtesting (solar_ml_pipeline.ipynb).
+darts==0.44.1
+# MinMaxScaler és StandardScaler a darts Scaler wrapperén belül.
+scikit-learn==1.7.2
+# PyTorch backend – a darts TFT model (PyTorch Lightning) kötelező függősége.
+# GPU (CUDA 12.4) telepítés:
+#   pip install torch==2.6.0+cu124 --index-url https://download.pytorch.org/whl/cu124
+# CPU esetén (lassabb betanítás):
+#   pip install torch>=2.6.0
+torch>=2.6.0
+
+# --- 5. Adatvizualizáció ---
 # Az (rész)eredmények és a statisztikai jellemzők grafikus ábrázolásához.
 matplotlib==3.10.9
 seaborn==0.13.2

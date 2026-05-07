@@ -1,31 +1,33 @@
 <a id="teteje"></a>
 
-# Solar ETL & Simulation Project 
-> (`solar-etl-simulation`)
+# Solar ML Pipeline
+> (`solar-ml-pipeline`)
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Feladat-PV_Szimuláció-22c55e?style=flat-square" alt="Feladat">
-  <img src="https://img.shields.io/badge/Könyvtár-pvlib-f97316?style=flat-square" alt="pvlib">
+  <img src="https://img.shields.io/badge/Feladat-PV_Szimuláció_+_ML_Előrejelzés-22c55e?style=flat-square" alt="Feladat">
+  <img src="https://img.shields.io/badge/Szimuláció-pvlib-f97316?style=flat-square" alt="pvlib">
   <img src="https://img.shields.io/badge/ETL-OpenMeteo_→_DuckDB-50fa7b?style=flat-square" alt="ETL">
+  <img src="https://img.shields.io/badge/ML-Darts_TFT-a855f7?style=flat-square" alt="TFT">
   <img src="https://img.shields.io/badge/Python-3.10-3776ab?style=flat-square&logo=python&logoColor=white" alt="Python">
-  <img src="https://img.shields.io/badge/Panel-Trina_Solar_400Wp-8b5cf6?style=flat-square" alt="Panel">
-  <img src="https://img.shields.io/badge/Helyszín-Budapest_Infopark-e11d48?style=flat-square" alt="Helyszín">
+  <img src="https://img.shields.io/badge/Panel-Jinko_Tiger_Neo_430Wp-8b5cf6?style=flat-square" alt="Panel">
+  <img src="https://img.shields.io/badge/Helyszín-Debrecen_DGÖ-e11d48?style=flat-square" alt="Helyszín">
 </p>
 
 <p align="center">
   <a href="#attekintes">Áttekintés</a> &bull;
   <a href="#architektura">Architektúra</a> &bull;
   <a href="#parameterek">Paraméterek</a> &bull;
-  <a href="#megvalasztott">Megválasztott értékek</a> &bull;
+  <a href="#ml-modell">ML Modell</a> &bull;
   <a href="#setup">Setup</a> &bull;
   <a href="#struktura">Struktúra</a> &bull;
+  <a href="#megvalasztott">Megválasztott értékek</a> &bull;
   <a href="#dontes">Technikai döntések</a> &bull;
   <a href="#kihivas">Kihívások</a> &bull;
   <a href="#kapcsolat">Kapcsolat</a>
 </p>
 
 <p align="center">
-  ☀️ Napenergia ETL és szimulációs pipeline – OpenMeteo-tól az éves termelési becslésig.
+  ☀️ Napenergia ETL, fizikai szimuláció és Deep Learning alapú másnapi termelés-előrejelzés – OpenMeteo-tól a probabilisztikus TFT modellezésig.
 </p>
 
 ---
@@ -33,13 +35,15 @@
 <a id="attekintes"></a>
 ## Áttekintés
 
-Ez a projekt egy adatmérnöki és energetikai szimulációs feladat megvalósítása. A cél egy Python alapú pipeline felépítése, amely meteorológiai adatokat tölt le, majd ezek alapján kiszámítja egy specifikus napelempark éves energiatermelését a 2023-as évre vonatkozóan.
+Ez a projekt egy napelemes adatfeldolgozó (ETL) és fizikai szimulációs pipeline kiterjesztése egy **Day-Ahead (másnapi) termelés-előrejelző Deep Learning modellel**. A cél egy Python alapú rendszer felépítése, amely meteorológiai adatokat tölt le, fizikailag szimulál egy valós napelemrendszert, majd az eredményeket Temporal Fusion Transformer (TFT) modellel másnapi, valószínűségi előrejelzésre használja fel.
 
-A projekt három komponensből és egy analitikai notebookból áll:
+A projekt **két Jupyter Notebook** köré szerveződik, amelyeket a közös DuckDB adatbázis köt össze:
 
-1. **ETL Komponens** (`data_loader.py`): Historikus időjárási adatok (irradiancia, hőmérséklet, szélerősség) kinyerése az OpenMeteo API-ból, és legalább órás felbontású tárolása egy lokális DuckDB analitikus adatbázisban (`solar_data.duckdb`).
-2. **Szimulációs Komponens** (`pv_calculator.py`): A `pvlib` könyvtár segítségével a napelempark (10 db 400 Wp Trina Solar Vertex S DE09.08 panel, 18 fokos dőlésszög, 5 kW max. inverter) éves energiatermelésének modellezése az adatbázisból kinyert adatok alapján.
-3. **Analitikai Komponens** (`analysis.ipynb`): Az eredmények vizualizációja és statisztikai elemzése interaktív Jupyter notebookban. A notebook egyben az orchestrátor is: sorban meghívja az ETL és szimulációs függvényeket, majd megjeleníti az eredményeket. Tartalmaz egy üzleti és környezeti hatásbecslő szekciót is, amely a szimulált éves termelést 2023-as dokumentált áramár- és CO₂-emissziós adatok alapján pénzügyi megtakarítássá és kiváltott szén-dioxid-mennyiséggé fordítja le.
+1. **ETL + Szimulációs Notebook** (`analysis.ipynb`): Historikus időjárási adatok (irradiancia, hőmérséklet, szélsebesség) letöltése az OpenMeteo API-ból 3 évre (2023–2025), pvlib-alapú napelemrendszer-szimuláció inverter clippinggel és éves degradációval, az eredmények mentése DuckDB-be (`p_ac_net`), valamint részletes vizualizáció.
+
+2. **ML Pipeline Notebook** (`solar_ml_pipeline.ipynb`): A DuckDB-ből kinyert adatok alapján TFT modell betanítása és gördülő (rolling) másnapi előrejelzés a 2025-ös teszt évre, P10/P50/P90 bizonytalansági sávokkal.
+
+**Helyszín:** Debrecen, Déli Gazdasági Övezet · **Időszak:** 2023–2025 · **Rendszer:** 10 × Jinko Tiger Neo 430Wp, 3 kW inverter (ILR = 1,43)
 
 ---
 
@@ -48,41 +52,103 @@ A projekt három komponensből és egy analitikai notebookból áll:
 
 ```mermaid
 flowchart TD
-    API(["🌐 OpenMeteo Archive API\nHistorikus adatok · 2023 · UTC"])
-    CFG(["⚙️ config.py\nEgyetlen igazságforrás\nKoordináták · Panel params · API beállítások"])
+    API(["🌐 OpenMeteo Archive API\nHistorikus adatok · 2023–2025 · UTC"])
+    CFG(["⚙️ config.py\nEgyetlen igazságforrás\nKoordináták · Panel params · ML beállítások"])
 
     CFG -.->|importálja| DL
     CFG -.->|importálja| PV
+    CFG -.->|importálja| ML
 
     API --> DL
 
     DL["📥 data_loader.py\nETL pipeline\nAPI hívás · DST-biztos TZ konverzió\nDataFrame tisztítás · idempotens DB írás"]
-    DB[("🦆 solar_data.duckdb · weather_data\n8 760 sor · óránkénti\nghi · dni · dhi · temp_air · wind_speed")]
-    PV["⚡ pv_calculator.py\npvlib pipeline\nszolárpozíció · POA · pvsyst_cell()\npvwatts_dc() · inverter.pvwatts()"]
-    DB2[("🦆 solar_data.duckdb · pv_results\n8 760 sor · óránkénti\npoa_global · temp_cell · p_dc · p_ac")]
-    NB["📊 analysis.ipynb\nOrchestrátor + Vizualizáció\nKPI dashboard · veszteség-vízesés\nPOA-binenként scatter · hatásbecslés"]
-    HTML(["📄 HTML export\nBeadandó kimenet"])
+    DB1[("🦆 solar_data.duckdb · weather_data\n26 304 sor · óránkénti\nghi · dni · dhi · temp_air · wind_speed")]
+    PV["⚡ pv_calculator.py\npvlib pipeline · éves degradáció\nszolárpozíció · POA · pvsyst_cell()\npvwatts_dc() · inverter clipping"]
+    DB2[("🦆 solar_data.duckdb · pv_results\n26 304 sor · óránkénti\npoa_global · temp_cell · p_dc · p_ac · p_ac_net")]
+    NB1["📊 analysis.ipynb\nOrchestrátor + Vizualizáció\nKPI dashboard · veszteség-vízesés\nPOA-scatter · éves degradáció"]
+    ML["🤖 solar_ml_pipeline.ipynb\nTFT betanítás · gördülő backtest\nDay-Ahead 24h előrejelzés\nP10 / P50 / P90 sávok"]
+    MODEL[("💾 solar_tft_model_manual.pt\nBetanított TFT checkpoint")]
 
-    DL --> DB --> PV --> DB2 --> NB --> HTML
+    DL --> DB1 --> PV --> DB2
+    DB2 --> NB1
+    DB2 --> ML --> MODEL
 ```
+
+**Separation of Concerns:** a két notebook kizárólag a DuckDB adatbázison keresztül kommunikál. Az ML notebook nem foglalkozik ETL-lel, az ETL notebook nem tartalmaz ML kódot.
 
 ---
 
 <a id="parameterek"></a>
-## Napelem Park Paraméterei
+## Napelem Rendszer Paraméterei
 
 | Paraméter | Érték | Forrás |
 |---|---|---|
-| Panel típus | Trina Solar Vertex S TSM-400 DE09.08 | Adatlap |
-| Névleges teljesítmény | 400 Wp / panel | Adatlap (STC) |
-| Panelek száma | 10 db | Feladat |
-| Összes DC teljesítmény | 4 000 Wp | Számított |
-| Modul hatásfok | 20,8 % | Adatlap |
-| Hőmérsékleti együttható | -0,34 %/K | Adatlap |
-| Dőlésszög | 18° | Feladat |
-| Tájolás | 180° (dél) | Feltételezett |
-| Inverter max. teljesítmény | 5 000 W | Feladat |
+| Panel típus | Jinko Solar Tiger Neo N-type 54HL4R-B | Adatlap |
+| Névleges teljesítmény | 430 Wp / panel | Adatlap (STC) |
+| Panelek száma | 10 db | – |
+| Összes DC teljesítmény | 4 300 Wp | 10 × 430 W |
+| Modul hatásfok | 22,02 % | Adatlap |
+| Hőmérsékleti együttható | −0,30 %/K (N-típus) | Adatlap |
+| Dőlésszög | 30° | – |
+| Tájolás | 180° (dél) | Optimális, északi félgömb |
+| Inverter max. AC teljesítmény | 3 000 W | – |
+| Inverter Loading Ratio (ILR) | 4 300 / 3 000 = **1,43** | Clipping! |
 | Inverter hatásfok | 96 % | Iparági tipikus |
+| Degradáció – 1. év | −1,0 % | Jinko adatlap |
+| Degradáció – 2+ év | −0,4 % / év | Jinko adatlap |
+
+---
+
+<a id="ml-modell"></a>
+## ML Modell – Temporal Fusion Transformer (TFT)
+
+### Miért TFT?
+
+A Temporal Fusion Transformer nemcsak pontbecslést, hanem ipari szintű **valószínűségi előrejelzést** (P10/P50/P90 kvantilisek) ad. Képes kezelni a hosszú-távú szezonális mintázatokat (éves ciklus), a rövid-távú időjárási ingadozásokat, és az inverter clippingből adódó nemlineáris viselkedést.
+
+### Architektúra és Hiperparaméterek
+
+| Paraméter | Érték | Magyarázat |
+|---|---|---|
+| **Könyvtár** | Darts | Gyors prototipizálás, beépített TFT, backtesting API |
+| **Encoder (input) ablak** | 168 óra (7 nap) | Heti mintázatok rögzítéséhez elegendő |
+| **Decoder (output) ablak** | 24 óra (1 nap) | Day-ahead előrejelzés |
+| **Hidden size** | 64 | |
+| **LSTM rétegek** | 2 | |
+| **Attention fejek** | 4 | |
+| **Likelihood** | QuantileRegression | P10 / P50 / P90 |
+| **Epochok** | 20 | Korai leállítással |
+
+### Adatfelosztás
+
+| Halmazhoz | Időszak | Sorok | Cél |
+|---|---|---|---|
+| **Train** | 2023-01-01 – 2024-09-30 | 15 334 h | Mintázatok megtanulása |
+| **Validáció** | 2024-10-01 – 2024-12-31 | 2 209 h | Korai leállítás alapja |
+| **Test** | 2025-01-01 – 2025-12-31 | 8 760 h | Gördülő day-ahead backtest |
+
+### Célváltozó és Bemenetek
+
+- **Target:** `p_ac_net` – a hálózatra betáplált végső AC teljesítmény (degradációval és rendszerveszteségekkel csökkentve)
+- **Past Covariates:** historikus `p_ac_net`, `ghi`, `temp_air`, `wind_speed`
+- **Future Covariates:** `hour_sin`, `hour_cos`, `month_sin`, `month_cos` (ciklikus kódolás)
+
+### Day-Ahead Gördülő Backtest (2025)
+
+A modell úgy végzi a kiértékelést, ahogyan egy valós üzemeltetési rendszer működne: minden nap éjfélkor a megelőző 7 nap adatai alapján megjósolja a következő 24 óra termelését. Ez 365 egymást követő day-ahead előrejelzést jelent.
+
+### Eredmények
+
+| Metrika | Érték | Megjegyzés |
+|---|---|---|
+| **RMSE** | **46,88 W** | Minden 2025-ös óra |
+| **MAPE** | **9,38 %** | Csak nappali órák (p_ac_net > 5 W) |
+
+### Vizualizációk
+
+- **Véletlenszerű heti ablak:** P10/P50/P90 sávok vs. valós termelés
+- **Havi × Óránkénti hőtérkép:** tényleges vs. P50 vs. abszolút hiba – a clipping és a szezonalitás jól látható
+- **Napi MAPE naptár:** 365 napos hőtérkép – zöld (pontos) → piros (felhős/bizonytalan) → szürke (téli, nincs termelés)
 
 ---
 
@@ -92,10 +158,7 @@ flowchart TD
 ### Opció 1: Conda környezet (Ajánlott)
 
 ```bash
-# Környezet létrehozása (csak az első alkalommal)
 conda env create -f environment.yml
-
-# Környezet aktiválása
 conda activate solar_env
 ```
 
@@ -112,18 +175,25 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
+> **Megjegyzés:** A `darts` csomag és PyTorch függőségei automatikusan települnek a `requirements.txt`-ből. GPU használathoz a PyTorch CUDA verziója külön telepítendő.
+
 ### Futtatás
 
-A projekt futtatásához kizárólag a notebookot kell megnyitni és cellánként végrehajtani:
+**1. lépés – ETL + Szimuláció:**
 
 ```bash
 jupyter notebook analysis.ipynb
 ```
 
-A notebook sorban elvégzi az adatletöltést, az adatbázisba írást, a pvlib szimulációt, majd megjeleníti az összes vizualizációt és statisztikát. Külön `.py` fájlt kézzel futtatni nem szükséges.
+A notebook sorban elvégzi az adatletöltést (OpenMeteo API, 2023–2025), a pvlib szimulációt degradációval és clippinggel, elmenti az eredményeket DuckDB-be, majd megjeleníti a vizualizációkat.
 
-A kész notebookot HTML formátumban lehet exportálni a vizualizációk kimenetével együtt:
-**File → Save and Export Notebook As → HTML**
+**2. lépés – ML Pipeline:**
+
+```bash
+jupyter notebook solar_ml_pipeline.ipynb
+```
+
+A notebook rácsatlakozik a DuckDB adatbázisra, betanítja (vagy betölti) a TFT modellt, lefuttatja a gördülő 2025-ös backtestet, és kirajzolja az eredményeket. Ha a `solar_tft_model_manual.pt` checkpoint már létezik, az újratanítás kihagyható.
 
 ---
 
@@ -131,110 +201,106 @@ A kész notebookot HTML formátumban lehet exportálni a vizualizációk kimenet
 ## Projekt Struktúra
 
 <pre>
-solar-etl-simulation/
-├── <a href="config.py">config.py</a>           # Minden konstans egy helyen (koordináták, panel params, API beállítások)
-├── <a href="data_loader.py">data_loader.py</a>      # 1. komponens: OpenMeteo API → DuckDB ETL pipeline
-├── <a href="pv_calculator.py">pv_calculator.py</a>    # 2. komponens: DuckDB → pvlib → éves energiatermelés
-├── <a href="analysis.ipynb">analysis.ipynb</a>      # 3. komponens + orchestrátor: vizualizáció, statisztikák, hatásbecslés
-├── tests/
-│   └── <a href="tests/_test_duckdb.py">_test_duckdb.py</a>  # Integrációs tesztszkript: ETL + pvlib pipeline ellenőrzése
-├── solar_data.duckdb   # 🚨 Generált DuckDB adatbázis (gitignore-ban, nem verziókövetett)
-├── environment.yml     # Conda függőségek (verziópinelt)
-├── requirements.txt    # pip függőségek (verziópinelt)
-├── .python-version     # Python verzió rögzítése (3.10.20)
-├── .gitignore          # Adatbázis, cache, képfájlok, IDE fájlok kizárása
+solar-ml-pipeline/
+├── <a href="config.py">config.py</a>                        # Minden konstans egy helyen (koordináták, panel, ML beállítások)
+├── <a href="data_loader.py">data_loader.py</a>                   # OpenMeteo API → DuckDB ETL pipeline (multi-év, DST-biztos)
+├── <a href="pv_calculator.py">pv_calculator.py</a>                 # DuckDB → pvlib → p_ac_net (degradációval, clippinggel)
+├── <a href="analysis.ipynb">analysis.ipynb</a>                   # 1. notebook: ETL orchestrátor + pvlib + vizualizáció
+├── <a href="solar_ml_pipeline.ipynb">solar_ml_pipeline.ipynb</a>          # 2. notebook: TFT betanítás + day-ahead backtest + viz
+├── solar_tft_model_manual.pt        # 🔒 Betanított TFT modell (gitignore-ban)
+├── solar_tft_model_manual.pt.ckpt   # 🔒 Darts checkpoint artifact (gitignore-ban)
+├── darts_logs/                      # 🔒 Tanítási logok, epoch checkpointok, backtest cache
+│   └── backtest_scaled.pkl          #    Gördülő backtest cache (365 nap)
+├── solar_data.duckdb                # 🔒 Generált DuckDB adatbázis (gitignore-ban)
+├── environment.yml                  # Conda függőségek (verziópinelt)
+├── requirements.txt                 # pip függőségek (verziópinelt)
+├── .python-version                  # Python verzió rögzítése (3.10)
+├── .gitignore                       # Adatbázis, modellfájlok, cache kizárása
 └── README.md
 </pre>
 
-**Konfiguráció elvének magyarázata:** minden "magic number" és beállítás a `config.py`-ban van definiálva, adatlapra hivatkozó kommentekkel. A többi modul ebből importál, így a rendszer egy helyen auditálható és módosítható.
+**Konfiguráció elvének magyarázata:** minden „magic number" és beállítás a `config.py`-ban van definiálva, adatlapra hivatkozó kommentekkel. A két notebook és a Python modulok ebből importálnak, így a rendszer egyetlen helyen auditálható és módosítható.
 
 ---
 
 <a id="megvalasztott"></a>
 ## Megválasztott Alapértelmezett Értékek
 
-A feladat nem határozza meg a napelem park összes paraméterét. Az alábbiak azok az értékek, amelyeket mi választottunk az adatlap, az iparági gyakorlat vagy a magyar/közép-európai viszonyok alapján:
-
 ### Helyszín és meteorológia
 
 | Paraméter | Érték | Indoklás |
 |---|---|---|
-| **Város** | Budapest, Infopark E épület | Az interjú helyszíne (feladatból) |
-| **Földrajzi koordináták** | 47,47°N / 19,06°E / 109 m | WGS84; Infopark E épület (ismert cím) |
+| **Város** | Debrecen, Déli Gazdasági Övezet | Valós ipari/gyári környezet szimulálása |
+| **Koordináták** | 47,4728°N / 21,6145°E / 121 m | WGS84; a DGÖ középpontja |
 | **Időzóna** | Europe/Budapest (UTC+1/+2) | Magyarország zónája |
 | **Meteorológiai adatok** | OpenMeteo Archive API, UTC | Nyílt forráskódú, ingyenes, DST-biztos, óránkénti felbontás |
-| **Év** | 2023 | Feladatbeli megadás |
+| **Időszak** | 2023–2025 (3 év) | 2 év train + 1 év test |
 
 ### Napelem park mechanikai paraméterei
 
 | Paraméter | Érték | Indoklás |
 |---|---|---|
-| **Dőlésszög (tilt)** | 18° | Feladatbeli megadás |
-| **Tájolás (azimuth)** | 180° (déli) | A feladat nem adta meg. Az elméleti maximumhoz a déli tájolást vettük alapul. *Interjú-megjegyzés:* Egy lapostetős irodaházon a valóságban szinte mindig Kelet-Nyugati tájolást alkalmaznak a jobb helykihasználás miatt, de az egyszerűbb modellezés kedvéért maradt az elméleti déli irány. |
-| **Szerelési mód** | Lapostetős (ballasztos/lesúlyozott) | A feladat specifikusan az interjú helyszínét (Infopark E) adta meg, ami egy többszintes irodaház. A talajra telepített (freestanding) rendszer itt fizikailag értelmezhetetlen, a modellezés során lapostetős telepítéssel és az ebből fakadó gyengébb szellőzési paraméterekkel kell számolni. |
+| **Dőlésszög (tilt)** | 30° | ~47°N szélességen optimális éves hozamhoz |
+| **Tájolás (azimuth)** | 180° (déli) | Északi félgömbön az elméleti optimum |
 
-### Napelem paraméterek (Trina Solar Vertex S TSM-400 DE09.08, adatlap-alapú)
+### Napelem paraméterek (Jinko Solar Tiger Neo N-type 54HL4R-B, adatlap-alapú)
 
 | Paraméter | Érték | Indoklás |
 |---|---|---|
-| **Modul típusa** | Trina Solar Vertex S TSM-400 DE09.08 | Feladatban megadott adatlap linkből |
-| **Névleges teljesítmény** | 400 Wp / panel | Adatlap (STC: 1000 W/m², 25 °C, AM 1.5) |
-| **Panelek száma** | 10 db | Feladatbeli megadás |
-| **Össz DC teljesítmény** | 4 000 Wp (4 kWp) | 10 × 400 = 4 000 W |
-| **Modul hatásfok** | 20,8% (η_m) | Adatlap (TSM-400 sor, "Module Efficiency ηm") |
-| **Hőmérsékleti együttható** | −0,34 %/K (γ_pdc) | Adatlap (teljesítmény hőmérsékleti függése) |
+| **Névleges teljesítmény** | 430 Wp / panel | Adatlap (STC: 1000 W/m², 25 °C, AM 1.5) |
+| **Panelek száma** | 10 db | 4,3 kWp összteljesítmény |
+| **Össz DC teljesítmény** | 4 300 Wp | 10 × 430 W |
+| **Modul hatásfok** | 22,02 % | Adatlap (N-típusú, magasabb, mint P-típusnál) |
+| **Hőmérsékleti együttható** | −0,30 %/K | Adatlap; N-típusnál kedvezőbb, mint a P-típus ~−0,34 %/K |
+
+### Degradáció (Jinko adatlap alapján)
+
+| Paraméter | Érték | Indoklás |
+|---|---|---|
+| **1. év degradáció** | −1,0 % | LID (Light-Induced Degradation) + kezdeti veszteség |
+| **Éves degradáció (2+ év)** | −0,4 % / év | Jinko Tiger Neo adatlapból; N-típusnál alacsonyabb a P-típus ~0,55 %/év értékénél |
+| **Alap (referencia) év** | 2023 | A 2023-as adatok 100%-os teljesítményből indulnak |
+
+A degradáció **vektorizáltan**, időbélyegenként kerül alkalmazásra a `pv_calculator.py`-ban, és a `p_ac_net` célváltozóba van beégetve. Az ML modell ezt a lassú, monoton csökkenést implicite megtanulja.
 
 ### Cellahőmérséklet modellezés (pvlib.temperature.pvsyst_cell)
 
 | Paraméter | Érték | Indoklás |
 |---|---|---|
-| **Hőveszteségi tényező (konstans rész)** | U_c = 26,744 W/m²/K | Adatlapból levezetett (NOCT = 43 °C): `U_c = poa × (1 − η_m/α) / (T_NOCT − T_air) = 800 × 0,769 / 23 = 26,744 W/m²/K` |
-| **Hőveszteségi tényező (szél-függő)** | U_v = 0,0 Ws/m³/K | **Fizikai realitás az épületen.** Egy lapostetőn, ballasztos szerkezettel telepített rendszernél a szél hűtőhatása minimális az alákapást gátló aerodinamikai burkolatok miatt. Az U_v=0 érték reálisan szimulálja a tetőn rekedő hőt és a gyengébb szellőzést. |
-| **Elnyelt sugárzás aránya** | α = 0,9 | pvlib alapértelmezés (tipikus szilícium panel) |
-| **STC referencia hőmérséklet** | 25 °C | Iparági szabvány (STC: Standard Test Conditions) |
+| **U_c (konstans hőveszteségi tényező)** | 28,77 W/m²/K | Jinko adatlap (NOCT = 41 °C): `U_c = 800 × (1 − η_m/α) / (T_NOCT − 20) = 800 × 0,755 / 21` |
+| **U_v (szél-függő tag)** | 0,0 Ws/m³/K | Lapostetős ballasztos szerkezet → minimális szélhűtés |
+| **Elnyelt sugárzás aránya** | α = 0,9 | pvlib alapértelmezés |
 
 ### Inverter paraméterek
 
 | Paraméter | Érték | Indoklás |
 |---|---|---|
-| **Maximális AC teljesítmény** | 5 000 W (5 kW) | Feladatbeli megadás |
-| **DC bemeneti teljesítmény max.** | 5 000 W | Az inverter maximális AC-hez szükséges minimum DC bemenet; pvlib.inverter.pvwatts paraméter. |
-| **Inverter Loading Ratio (ILR)** | 4 000 / 5 000 = **0,80** | Jellemzően 1,0–1,3 között van (túlterhelés engedélyezése miatt). Az ILR=0,80 kissé alulterhelt inverter, de konzervatív választás. |
-| **Névleges inverter hatásfok** | 96,0% | Iparági tipikus érték (95–97% a szokásos tartomány) |
-| **PVWatts referencia hatásfok** | 96,37% | pvlib.inverter.pvwatts függvény alapértelmezése; ennek használata mellett módosítható az ETA_INV_NOM |
+| **Maximális AC teljesítmény** | 3 000 W | Határozott clippinget okoz nyáron (ILR = 1,43) |
+| **Inverter Loading Ratio (ILR)** | 4 300 / 3 000 = **1,43** | Szándékos túlterhelés → nyári clipping → változatos tanítóadat az ML-nek |
+| **Névleges inverter hatásfok** | 96,0 % | Iparági tipikus érték |
 
-### POA (Plane of Array) irradiancia dekompozíciós modell
+### Rendszerveszteség modell (NREL PVWatts v5 alap)
 
-| Paraméter | Érték | Indoklás |
-|---|---|---|
-| **Dekompozíciós modell** | haydavies | Körülötte circumsolar sugárzás (gyűrű a Nap körül) és horizont fényerősödés. Budapest kontinentális, részben felhős égboltra pontosabb az isotropic-nál; a Perez modellnél egyszerűbb (1–3% éves eltérés, interjúfeladat-szinten nem indokolt). |
-| **Extraterrestris normál irradiancia** | `pvlib.irradiance.get_extra_radiation(index)` | Nap–Föld távolság alapján számított (hozzávetőlegesen 1361 W/m², szinusz-válto módosítás) |
-
-### Rendszerveszteség modell (NREL PVWatts standard)
-
-A veszteségek **multiplikatívan** hatnak: `derate_factor = ∏(1 − loss_i)` ≈ **0,8679**, teljes veszteség **~13,21%**.
+A veszteségek **multiplikatívan** hatnak: `derate_factor = ∏(1 − loss_i)` ≈ **0,8679**, teljes veszteség **~13,21 %**.
 
 | Komponens | Érték | Indoklás |
 |---|---|---|
-| **Koszolódás (soiling)** | 2,0% | NREL PVWatts v5 alapérték; 2023 európai városok félszennyezett légköre (sem sivatag, sem szélsőségesen tiszta) |
-| **Árnyékolás (shading)** | 3,0% | NREL PVWatts v5 alapérték; a 3% még árnyékolásmentesnek mondott rendszereknél is fedezi a horizont-takarást (távoli épületek, dombok). |
-| **Modul-eltérés (mismatch)** | 2,0% | NREL PVWatts v5 alapérték; gyártási eltérés azonos típusú panelek között is jelen van (±3% adatlap-szórás). |
-| **DC kábelezés (wiring)** | 2,0% | NREL PVWatts v5 alapérték; DC oldali ellenállási veszteségek a panelek és az inverter között. |
-| **Csatlakozási veszteség (connections)** | 0,5% | NREL PVWatts v5 alapérték; kábelvégek, biztosítékok, megszakítók kontakt-ellenállása. |
-| **Fény okozta degradáció (LID)** | 1,5% | NREL PVWatts v5 alapérték; az első üzemévben jellemző ~0,3–0,8%, konzervatív felső becslés. |
-| **Névleges telj.-eltérés (nameplate)** | 0,0% | Adatlap: 0/+5 W tolerancia – a panel STC-n sosem teljesít a névleges 400 W alá; e veszteség nem releváns. |
-| **Rendelkezésre állás + karbantartás (availability)** | 3,0% | NREL PVWatts v5 alapérték; inverter- és rendszer-leállások (ütemezett és vészhelyzeti karbantartások). |
-| Hó (snow) | 0,0% | NREL PVWatts v5 alapérték; nem szerepel a derate-ben. |
-| Életkor (age) | 0,0% | NREL PVWatts v5 alapérték; nem szerepel a derate-ben. |
-| **Teljes derate faktor** | ~86,79% | Multiplikatív (nem additív): (1−0,02)(1−0,03)(1−0,02)²(1−0,005)(1−0,015)(1−0,03) |
+| Koszolódás (soiling) | 2,0 % | NREL PVWatts v5 alapérték |
+| Árnyékolás (shading) | 3,0 % | NREL PVWatts v5 alapérték |
+| Modul-eltérés (mismatch) | 2,0 % | NREL PVWatts v5 alapérték |
+| DC kábelezés (wiring) | 2,0 % | NREL PVWatts v5 alapérték |
+| Csatlakozási veszteség (connections) | 0,5 % | NREL PVWatts v5 alapérték |
+| Fény okozta degradáció (LID) | 1,5 % | NREL PVWatts v5 alapérték |
+| Rendelkezésre állás (availability) | 3,0 % | NREL PVWatts v5 alapérték |
+| **Teljes derate faktor** | ~86,79 % | Multiplikatív: (1−0,02)(1−0,03)(1−0,02)²(1−0,005)(1−0,015)(1−0,03) |
 
 ### Adatbázis és technológia
 
 | Paraméter | Érték | Indoklás |
 |---|---|---|
-| **Adatbázis motor** | DuckDB (`solar_data.duckdb`) | Column-oriented, fájlalapú, deployment-mentes — ugyanolyan egyszerű mint a SQLite, de az analitikai workload-ra optimalizált. Natív `TIMESTAMPTZ` típus, közvetlen DataFrame I/O, SQLite scanner a migrációhoz. |
-| **Python verzió** | 3.10+ | Modern asyncio / walrus operator support; a dependencies (pvlib, pandas, duckdb) mind támogatják. |
-| **pvlib verzió** | 0.15.1+ | Stabil; tartalmazza a pvsyst_cell (module_efficiency paraméter), haydavies modell és az összes szükséges függvényt. |
+| **Adatbázis** | DuckDB (`solar_data.duckdb`) | Column-oriented, fájlalapú, deployment-mentes; natív TIMESTAMPTZ, közvetlen DataFrame I/O |
+| **ML könyvtár** | Darts | Magas szintű TFT API, beépített backtesting, TimeSeries absztrakció |
+| **Python verzió** | 3.10 | Stabil; minden függőség (pvlib, darts, duckdb) támogatja |
 
 ---
 
@@ -249,46 +315,33 @@ A veszteségek **multiplikatívan** hatnak: `derate_factor = ∏(1 − loss_i)` 
 | **`haydavies`** | **Circumsolar + horizont fényerősödés** | **Közepes-jó** | **Mérsékelt** |
 | `perez` | Teljes anizotrop empirikus modell | Legjobb | Magas |
 
-Budapest kontinentális éghajlatán a `haydavies` pontosabb az `isotropic`-nál. A `perez`-zel szemben az éves energiahozam szintjén várható eltérés 1–3%, ami nem indokolja a plusz komplexitást.
-
-### Tájolás (Azimuth): 180° (dél)
-
-A feladat nem adja meg a panelek tájolását. Az északi félgömbön a déli tájolás az optimális, ezért ezt az iparági alapértelmezést alkalmaztuk. A feltételezés a `config.py`-ban kommentben jelölve van.
-
-<div style="background:#faf5ff;border-left:5px solid #7c3aed;padding:12px 16px;border-radius:4px;margin:12px 0">
-<b>🎤 Interjún szóban kiemelhető:</b> A déli tájolás (180°) egy <b>explicit feltételezés</b> – a feladat ezt nem adja meg. A valós helyszínen az <b>épület orientációja</b>, árnyékolási hatások és egyéb tényezők eltérő azimutszeget indokolhatnak. Északi félgömbön a déltől keleti vagy nyugati irányban 45–90°-os eltérés az éves hozamot <b>10–20%-kal csökkentheti</b> – ez egy 4 kWp-os rendszernél 570–1 140 kWh/év különbséget jelent. A tényleges érték csak helyszíni felméréssel (épülettájolás, árnyékolástérkép) határozható meg pontosan.
-</div>
-
-### Cellahőmérséklet modell: pvsyst_cell (lapostetős telepítés)
-
-Mivel a feladat helyszíne az Infopark E épület, a panelek hűtése rosszabb, mint egy szabadföldi (freestanding) rendszeré. A `pvlib.temperature.pvsyst_cell` függvényt ennek megfelelően hívjuk meg: az `u_v=0.0` (szélfüggő hűtési tag teljes elhanyagolása) szimulálja a tetőn megrekedő hőt és a ballasztos tartószerkezetek zárt aerodinamikai kialakítását. 
-
-> **Interjú-megjegyzés:** Egy lapostetőn a szélsebesség-mérés (10 m magasságból) amúgy is irreleváns a panelek felszíni légmozgása szempontjából. A hűtőhatás elhanyagolása reálisabb, magasabb becsült cellahőmérsékletet eredményez, ami pontosabban modellezi egy irodaház tetején lévő rendszer valós, némileg alacsonyabb éves termelését.
-
-### Modul hatásfok (`module_efficiency`): 0.208
-
-Az adatlapból (TSM-400 DE09.08 sor, STC): `η_m = 20,8%`. A `pvsyst_cell` energiamérleg-egyenletéhez szükséges; pontatlan megadása szisztematikusan torzítja a cellahőmérséklet-számítást és az egész szimulációt.
+Debrecen kontinentális éghajlatán a `haydavies` pontosabb az `isotropic`-nál. A `perez`-zel szemben az éves energiahozam szintjén várható eltérés 1–3 %, ami egy prototípus-szintű implementációban nem indokolja a plusz komplexitást.
 
 ### Adatbázis: DuckDB (SQLite + SQLAlchemy ORM helyett)
-
-Az eredeti implementáció **SQLite + SQLAlchemy ORM** kombinációt használt. Bár ez zero-deployment fájlalapú megoldást nyújtott, az analitikai munkaterheléssel szemben két strukturális hátrányba ütközött:
-
-1. **Row-oriented tároló:** a SQLite soronként tárolja az adatokat — ezért GROUP BY, ablakfüggvény és aggregáció esetén az összes sort be kell olvasni. A `df_pv.groupby("month").agg(...)` típusú hívásokhoz csak az adott oszlopok szükségesek.
-2. **ORM boilerplate:** a `WeatherData` és `PVResult` SQLAlchemy modellek ~80 sor kódot tettek ki, kizárólag azért, hogy egy pandas DataFrame adatait sorról sorra be lehessen írni és ki lehessen olvasni.
-
-A **DuckDB** mindkét problémát megoldja, miközben megtartja a SQLite legfontosabb előnyét (fájlalapú, nincs szerver):
 
 | Szempont | SQLite + SQLAlchemy ORM | DuckDB |
 |:---|:---|:---|
 | **Tárolási architektúra** | Row-oriented | Column-oriented — GROUP BY, aggregáció, szűrés lényegesen gyorsabb |
 | **Timestamp típus** | `VARCHAR` ISO 8601 (string) | `TIMESTAMPTZ` — natív, UTC-ben tárolva, automatikus konverzió |
-| **DataFrame → DB írás** | Soronkénti ORM objektum + `Session.add_all()` | Replacement Scan: a Python változó neve közvetlenül SQL-ben hivatkozható |
+| **DataFrame → DB írás** | Soronkénti ORM objektum + `Session.add_all()` | Replacement Scan: Python változó neve közvetlenül SQL-ben hivatkozható |
 | **DB → DataFrame olvasás** | `pd.read_sql()` + kézi `pd.to_datetime(..., utc=True)` | `.execute("...").df()` — egy hívás, típushelyes eredmény |
 | **ORM réteg** | ~80 sor boilerplate | Nem szükséges |
-| **Migráció régi adatbázisból** | — | `sqlite_scan('solar_data.db', 'táblanév')` — egy SQL lekérdezéssel átolvassa a régi fájlt, API-hívás nélkül |
 | **Deployment** | Fájlalapú, nincs szerver | Fájlalapú, nincs szerver |
 
-**Egyszeri migráció:** az első futtatáskor a `data_loader.py` automatikusan detektálja a régi `solar_data.db` fájlt, és a DuckDB beépített `sqlite_scanner` bővítményével importálja a teljes `weather_data` és `pv_results` tartalmát az új `solar_data.duckdb`-be — API-hívás nélkül.
+### TFT vs. egyéb modellek
+
+| Modell | Erősség | Gyengeség |
+|---|---|---|
+| **TFT (Darts)** | Probabilisztikus (P10/P50/P90), szezonalitás, hosszú függőségek | Lassabb tanítás CPU-n |
+| LSTM | Egyszerű, gyors | Csak pontbecslés, nincs bizonytalansági sáv |
+| Prophet | Gyors, értelmező | Nem kezeli jól a fizikai korlátokat (clipping) |
+| XGBoost | Gyors, pontbecslés | Nincs natív temporal ablak, nincs probabilisztikus kimenet |
+
+A TFT választásának fő indoka: a **valószínűségi kimenet** (bizonytalansági sávok) ipari szinten elengedhetetlen a napelempark termelésének tervezéséhez – egy döntéshozónak nem elég a várható érték, tudnia kell a pesszimista (P10) és optimista (P90) szcenáriót is.
+
+### Cellahőmérséklet modell: pvsyst_cell (U_v = 0)
+
+A lapostetős ballasztos szerkezetben a szél hűtőhatása minimális az aerodinamikai kialakítás miatt. Az `u_v=0.0` érték realisztikusan szimulálja a tetőn megrekedő hőt, ami magasabb cellahőmérsékletet és ezáltal alacsonyabb termelést eredményez – konzervatív, de fizikailag indokolt feltételezés.
 
 ---
 
@@ -300,52 +353,62 @@ A **DuckDB** mindkét problémát megoldja, miközben megtartja a SQLite legfont
 
 > Az OpenMeteo API alapértelmezésben lokális időzónában adja vissza az adatokat, ami két problémát okoz évenként:
 >
-> - **Tavaszi átmenet (március 26.):** a `02:00` timestamp fizikailag nem létezik `Europe/Budapest`-ben – `NonExistentTimeError`
-> - **Őszi átmenet (október 29.):** a `02:xx` tartomány kétszer szerepel – `AmbiguousTimeError`
+> - **Tavaszi átmenet (március utolsó vasárnapja):** a `02:00` timestamp fizikailag nem létezik `Europe/Budapest`-ben – `NonExistentTimeError`
+> - **Őszi átmenet (október utolsó vasárnapja):** a `02:xx` tartomány kétszer szerepel – `AmbiguousTimeError`
 >
-> **Megoldás:** az API-t `timezone="UTC"` paraméterrel hívjuk. UTC-ben nincs DST, nincs nem létező és nincs kétértelmű időpont. A `_build_dataframe()`-ben `tz_localize("UTC")` → `tz_convert("Europe/Budapest")` konverzió történik, ami mindig helyes eredményt ad.
+> **Megoldás:** az API-t `timezone="UTC"` paraméterrel hívjuk. A `_build_dataframe()`-ben `tz_localize("UTC")` → `tz_convert("Europe/Budapest")` konverzió garantál helyes eredményt.
+
+</details>
+
+<details>
+<summary>💡 UTC → CET konverzió: 2026-01-01 00:00 szivárgás a grafikonokba</summary>
+
+> A 3-éves adatsor utolsó UTC-s timestampje `2025-12-31 23:00 UTC`. CET-re konvertálva ez `2026-01-01 00:00 CET`, ami bekerül a DataFrame-be és az `all_years` listába. Ennek következménye: a grafikonokon megjelennek a 2026-os szolsztíciusz-jelölők (NYnf 2026, TÉnf 2026), és a tengelyek `END_DATE` utánra nyúlnak.
+>
+> **Megoldás:** a `daily_kwh` és `rolling_14` sorozatokat az `END_DATE` (`config.py`-ból importálva) alapján levágjuk a vizualizációs cellában:
+> ```python
+> _end_ts = pd.Timestamp(END_DATE).tz_localize(TIMEZONE)
+> daily_kwh  = daily_kwh[daily_kwh.index <= _end_ts]
+> rolling_14 = rolling_14[rolling_14.index <= _end_ts]
+> all_years  = sorted(daily_kwh.index.year.unique())
+> ```
+
+</details>
+
+<details>
+<summary>💡 Multi-év adatletöltés: szökőév-tudatos sorellenőrzés</summary>
+
+> Az eredeti pipeline egyetlen évre (8 760 sor) volt méretezve. 3 évre kibővítve (2023–2025) a sorellenőrzésnek szökőévenként (2024: 8 784 sor) eltérő elvárással kell dolgoznia. A `data_loader.py` évenként futtatja az API-hívást, és az `expected_rows()` segédfüggvénnyel szökőév-tudatosan ellenőrzi a letöltött sorok számát.
 
 </details>
 
 <details>
 <summary>💡 pvlib verziókompatibilitás: eta_m → module_efficiency</summary>
 
-> A `pvlib.temperature.pvsyst_cell()` függvény paraméterneve a könyvtár egy korábbi verziójában `eta_m` volt, a telepített `0.15.1`-es verzióban `module_efficiency`. A hiba csak futásidőben, `TypeError`-ként jelentkezett. Ellenőrzési módszer: `inspect.signature(pvlib.temperature.pvsyst_cell)`.
+> A `pvlib.temperature.pvsyst_cell()` paraméterneve korábbi verzióban `eta_m` volt, a `0.15.x`-ben `module_efficiency`. A hiba csak futásidőben, `TypeError`-ként jelentkezett. Ellenőrzési módszer: `inspect.signature(pvlib.temperature.pvsyst_cell)`.
 
 </details>
 
 <details>
 <summary>💡 haydavies modell: kötelező dni_extra paraméter</summary>
 
-> A `pvlib.irradiance.get_total_irradiance()` `haydavies` modellel hívva `ValueError`-t dob, ha a `dni_extra` (extraterrestris DNI) paraméter hiányzik. Az `isotropic` modellnél ez nem kötelező, ezért nem volt nyilvánvaló. A `dni_extra` nem mérési adat – `pvlib.irradiance.get_extra_radiation(df.index)` számolja a Nap–Föld távolság alapján.
+> A `pvlib.irradiance.get_total_irradiance()` `haydavies` modellel hívva `ValueError`-t dob, ha a `dni_extra` paraméter hiányzik. Az `isotropic` modellnél ez opcionális, ezért nem volt nyilvánvaló. A `dni_extra` nem mérési adat – `pvlib.irradiance.get_extra_radiation(df.index)` számítja a Nap–Föld távolság alapján.
 
 </details>
 
 <details>
-<summary>💡 OpenMeteo API változónév: windspeed_10m</summary>
+<summary>💡 Darts TimeSeries: timezone-naive kötelezettség</summary>
 
-> Különböző dokumentációs forrásokban a szélsebesség API-változóneve kétféle alakban szerepelt: `windspeed_10m` és `wind_speed_10m`. Az OpenMeteo a `windspeed_10m` alakot fogadja el. Ha az API `400 Bad Request` hibával tér vissza, ezt kell először ellenőrizni a `config.py` `HOURLY_VARS` listájában.
+> A Darts `TimeSeries.from_dataframe()` timezone-aware indexet nem fogad el; `ValueError`-t dob. Az `Europe/Budapest` timezone-aware DataFrame indexet UTC-re kell konvertálni, majd `tz_localize(None)`-nal timezone-naive-vé tenni, mielőtt Darts `TimeSeries`-be kerül. A visszakonverzió a vizualizációs lépésben szükséges.
 
 </details>
 
 <details>
-<summary>💡 DuckDB kapcsolatkonfliktu: „Can't open connection with different configuration"</summary>
+<summary>💡 DuckDB kapcsolatkonfliktus: „Can't open connection with different configuration"</summary>
 
 > A DuckDB fájlalapú adatbázishoz egyidejűleg nem nyitható írható és `read_only=True` kapcsolat. Ez akkor okoz hibát, ha `run_pv_simulation()` megtartja az írható kapcsolatot, miközben `get_weather_dataframe()` `read_only=True`-val próbálja megnyitni ugyanazt a fájlt.
 >
-> **Megoldás:** a `run_pv_simulation()` az init/ellenőrzési fázist egy rövid életű `with duckdb.connect(db_path) as con:` blokkban végzi el (ami a blokk végén automatikusan bezárul), majd – már nyitott kapcsolat nélkül – hívja `get_weather_dataframe()`-t, végül az eredmény mentéséhez nyit egy új írható kapcsolatot. Ez garantálja, hogy soha nem áll fenn egyidejűleg írható és read-only kapcsolat ugyanahhoz a fájlhoz.
-
-</details>
-
-<details>
-<summary>💡 Timezone-aware összehasonlítás: tz-naive és tz-aware timestamp konfliktus</summary>
-
-> A vizualizációs cellákban a napfordulók dátumait (`pd.Timestamp`) a `df_pv` timezone-aware indexével kellett összehasonlítani. A `pd.Timestamp(datetime.date(...))` alapértelmezésben tz-naive objektumot ad vissza, ami `TypeError: Cannot compare tz-naive and tz-aware timestamps` hibát okoz.
->
-> **Megoldás:** a napfordulók timestamp-jeit explicit `tz_localize(TIMEZONE)` hívással kell timezone-aware-ré alakítani – a `TIMEZONE` konstans a `config.py`-ból importálva, nem hardcode-olva:
-> ```python
-> summer_solstice = pd.Timestamp(datetime.date(YEAR, 6, 21)).tz_localize(TIMEZONE)
-> ```
+> **Megoldás:** a `run_pv_simulation()` az init/ellenőrzési fázist egy rövid életű `with duckdb.connect(db_path) as con:` blokkban végzi el (ami a blokk végén automatikusan bezárul), majd az eredmény mentéséhez nyit egy új írható kapcsolatot.
 
 </details>
 
@@ -354,12 +417,12 @@ A **DuckDB** mindkét problémát megoldja, miközben megtartja a SQLite legfont
 ## Státusz
 
 - [x] Projekt struktúra, repó és környezet felállítása
-- [x] Technikai döntések dokumentálása (`config.py`, README)
-- [x] Adatbázis séma tervezése és implementálása (DuckDB, `weather_data` + `pv_results`, TIMESTAMPTZ PRIMARY KEY)
-- [x] ETL pipeline megírása (`data_loader.py`: OpenMeteo API → DuckDB, idempotens, DST-biztos, egyszeri SQLite-migráció)
-- [x] Szimulációs logika implementálása (`pv_calculator.py`: teljes pvlib pipeline, DuckDB írás/olvasás)
-- [x] Vizualizáció és statisztikák (`analysis.ipynb`: KPI dashboard, veszteség-vízesés, POA-binenként scatter, kulcsmutatók, üzleti hatásbecslés)
-- [x] Notebook HTML exportja (beadandó kimenet: File → Save and Export Notebook As → HTML)
+- [x] `config.py` – összes paraméter frissítve (Debrecen, Jinko 430Wp, 3 kW inverter, 30°, 2023–2025, degradáció, ML beállítások)
+- [x] `data_loader.py` – multi-év (2023–2025) támogatás, szökőév-tudatos sorellenőrzés
+- [x] `pv_calculator.py` – `p_ac_net` mentése DuckDB-be, éves degradációs faktor vektorizálva, `ALTER TABLE` migráció, inverter clipping
+- [x] `analysis.ipynb` – újrafuttatva (force_reload=True); 26 304 sor DuckDB-ben, éves termelés: 2023: 5 247 kWh, 2024: 5 496 kWh, 2025: 5 307 kWh
+- [x] `solar_ml_pipeline.ipynb` – TFT betanítás és gördülő day-ahead backtest (2025), RMSE 46,88 W, MAPE 9,38 % (nappali)
+- [x] Vizualizációk: heti P10/P50/P90 sávok, havi×óránkénti hőtérkép, napi MAPE naptár
 
 ---
 
