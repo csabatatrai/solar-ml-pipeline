@@ -1,0 +1,666 @@
+﻿=== CELL 11 ===
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+from config import C_WEATHER, C_BASE, MPL_DEFAULTS
+plt.rcParams.update(MPL_DEFAULTS)
+from matplotlib.patches import Patch
+from matplotlib.lines import Line2D
+
+fig, axes = plt.subplots(3, 1, figsize=(14, 8.5), sharex=True, layout="constrained")
+fig.suptitle(
+    "Bemeneti időjárási adatok – Budapest, Infopark 2023",
+    fontsize=12, fontweight="bold", color=C_BASE["title"]
+)
+
+dw       = df_weather.copy()
+dw_daily = dw.resample("D").mean()
+
+panels = [
+    ("ghi",        axes[0], C_WEATHER["ghi"],
+     "GHI  [W/m²]",         "Globális vízszintes sugárzás  ·  elsődleges ML-feature"),
+    ("temp_air",   axes[1], C_WEATHER["temp"],
+     "Léghőmérséklet  [°C]", "Levegőhőmérséklet  ·  cellatermodegrádáció hajtótényezője"),
+    ("wind_speed", axes[2], C_WEATHER["wind"],
+     "Szélsebesség  [m/s]",  "Szélsebesség 10 m-en  ·  hűtési hatékonyság"),
+]
+
+for col, ax, color, ylabel, subtitle in panels:
+    ax.fill_between(dw.index, dw[col], alpha=0.18, color=color)
+    ax.plot(dw_daily.index, dw_daily[col], color=color, lw=1.6)
+    ax.set_ylabel(ylabel, fontsize=9)
+    ax.text(0.012, 0.96, subtitle, transform=ax.transAxes,
+            va="top", fontsize=8.5, color=C_BASE["text_lt"])
+    ax.grid(axis="y", lw=0.4, alpha=0.35)
+    ax.spines[["top", "right"]].set_visible(False)
+
+    legend_handles = [
+        Patch(facecolor=color, alpha=0.45, label="Óránkénti adat"),
+        Line2D([0], [0], color=color, lw=1.8, label="Napi átlag"),
+    ]
+    ax.legend(handles=legend_handles, fontsize=8, loc="upper right",
+              framealpha=0.85, handlelength=1.4)
+
+axes[1].axhline(0, color=C_BASE["neutral"], lw=0.9, ls="--", alpha=0.8)  # fagyáshatár
+axes[2].xaxis.set_major_locator(mdates.MonthLocator())
+axes[2].xaxis.set_major_formatter(mdates.DateFormatter("%b"))
+fig.align_ylabels(axes)
+plt.show()
+
+
+=== CELL 18 ===
+import numpy as np
+import matplotlib.pyplot as plt
+from config import GAMMA_PDC, C_BASE, MPL_DEFAULTS
+plt.rcParams.update(MPL_DEFAULTS)
+
+daytime = df_pv[df_pv["poa_global"] > 50].copy()
+
+poa_bins = [
+    (250, 350, "300 ± 50 W/m²"),
+    (450, 550, "500 ± 50 W/m²"),
+    (650, 750, "700 ± 50 W/m²"),
+    (850, 950, "900 ± 50 W/m²"),
+]
+bin_colors    = plt.cm.YlOrRd(np.linspace(0.2, 0.9, len(poa_bins)))
+gamma_pdc_pct = GAMMA_PDC * 100
+
+fig, (axL, axR) = plt.subplots(1, 2, figsize=(15, 6), layout="constrained")
+
+# ── Bal panel: teljes adatfelhő – POA-irradiancia szerint színezve ────────────────────
+sc = axL.scatter(daytime["temp_cell"], daytime["p_dc"] / 1000,
+                 c=daytime["poa_global"], cmap="YlOrRd",
+                 alpha=0.40, s=5, rasterized=True, zorder=2)
+plt.colorbar(sc, ax=axL).set_label("POA irradiancia [W/m²]")
+axL.set_xlabel("Cellahőmérséklet [°C]")
+axL.set_ylabel("DC teljesítmény [kW]")
+axL.set_title(
+    "pvwatts_dc – teljes adatfelhő" + chr(10)
+    + "POA-irradiancia szerint színezve",
+    fontweight="bold", fontsize=11.5)
+axL.yaxis.grid(True, alpha=0.3, linestyle="--")
+axL.set_axisbelow(True)
+
+# ── Jobb panel: POA-binenként regresszió ─────────────────────────────────────
+axR.scatter(daytime["temp_cell"], daytime["p_dc"] / 1000,
+            c=C_BASE["bg"], alpha=0.18, s=4, rasterized=True, zorder=1,
+            label="Összes nappali pont (háttér)")
+
+slope_results = []
+for (lo, hi, label), color in zip(poa_bins, bin_colors):
+    subset = daytime[(daytime["poa_global"] >= lo) & (daytime["poa_global"] < hi)]
+    if len(subset) < 5:
+        continue
+    x = subset["temp_cell"].values
+    y = subset["p_dc"].values / 1000
+    axR.scatter(x, y, color=color, alpha=0.70, s=12, zorder=3, edgecolors="none")
+    slope, intercept = np.polyfit(x, y, 1)
+    x_line = np.linspace(x.min(), x.max(), 50)
+    y_mid  = slope * np.median(x) + intercept
+    pct_k  = (slope / y_mid) * 100 if y_mid > 0 else 0.0
+    axR.plot(x_line, slope * x_line + intercept,
+             color=color, linewidth=2.5, zorder=4,
+             label=f"{label}  |  {pct_k:+.2f} %/K")
+    slope_results.append((label, pct_k, len(subset)))
+
+_ann = (f"Adatlap gamma_pdc: {gamma_pdc_pct:+.2f} %/K"
+        + chr(10) + "300 W/m² bin torzít – alacsony POA-n kis ΔT")
+axR.text(0.97, 0.04, _ann,
+         transform=axR.transAxes, fontsize=9, ha="right", va="bottom",
+         fontweight="bold", color=C_BASE["text_dk"],
+         bbox=dict(boxstyle="round,pad=0.4", facecolor=C_BASE["ann_fill"],
+                   edgecolor=C_BASE["ann_edge"], linewidth=1.2, alpha=0.95))
+
+axR.set_xlabel("Cellahőmérséklet [°C]")
+axR.set_ylabel("DC teljesítmény [kW]")
+axR.set_title(
+    "DC modell-validáció (pvwatts_dc)" + chr(10)
+    + "Hőmérsékleti meredekség POA-binenként",
+    fontweight="bold", fontsize=11.5)
+axR.legend(framealpha=0.88, fontsize=8.5,
+           title="POA bin  |  mért meredekség", title_fontsize=9,
+           loc="upper left")
+axR.yaxis.grid(True, alpha=0.3, linestyle="--")
+axR.set_axisbelow(True)
+
+plt.show()
+
+print("")
+print("POA-binenként mért gamma_pdc:")
+for label, pct, n in slope_results:
+    print(f"  {label:22s}: {pct:+.3f} %/K  (n = {n})")
+print(f"  Adatlap referencia    : {gamma_pdc_pct:+.3f} %/K")
+
+=== CELL 21 ===
+import math
+from config import C_HEATMAP, MPL_DEFAULTS
+plt.rcParams.update(MPL_DEFAULTS)
+import seaborn as sns
+import numpy as np
+import matplotlib.pyplot as plt
+from config import DETAILED_SYSTEM_LOSSES
+
+MONTH_HU = [
+    "Jan", "Feb", "Már", "Ápr", "Máj", "Jún",
+    "Júl", "Aug", "Sze", "Okt", "Nov", "Dec",
+]
+derate_live = math.prod(1.0 - v for v in DETAILED_SYSTEM_LOSSES.values())
+
+pivot = df_pv.assign(
+    p_ac_net=df_pv["p_ac"] * derate_live,
+    _month=df_pv.index.month,
+    _hour=df_pv.index.hour,
+).pivot_table(values="p_ac_net", index="_hour", columns="_month", aggfunc="mean")
+pivot.columns = MONTH_HU
+pivot.index.name = "Napszak [h]"
+
+fig, ax = plt.subplots(figsize=(13, 7), layout="constrained")
+sns.heatmap(
+    pivot, ax=ax, cmap="YlOrRd", linewidths=0.2,
+    cbar_kws={"label": "Átlag nettó AC teljesítmény [W]", "shrink": 0.8},
+    annot=True, fmt=".0f", annot_kws={"size": 7.5},
+)
+ax.set_title("Átlagos nettó AC teljesítmény – hónap × napszak [W]", fontweight="bold")
+ax.set_xlabel("Hónap")
+
+plt.show()
+
+=== CELL 23 ===
+import datetime
+import pandas as pd
+import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
+import math
+from config import YEAR, TIMEZONE, DETAILED_SYSTEM_LOSSES, C_DAILY, C_BASE, MPL_DEFAULTS
+plt.rcParams.update(MPL_DEFAULTS)
+
+# ── Adatok előkészítése ───────────────────────────────────────────────────────
+derate_live = math.prod(1.0 - v for v in DETAILED_SYSTEM_LOSSES.values())
+daily_kwh  = (df_pv["p_ac"] * derate_live).resample("D").sum() / 1000
+rolling_14 = daily_kwh.rolling(14, center=True, min_periods=7).mean()
+
+# Napfordulók dátumai – YEAR-ből és TIMEZONE-ból számítva, nem hardcode-olva
+summer_solstice = pd.Timestamp(datetime.date(YEAR,  6, 21)).tz_localize(TIMEZONE)
+winter_solstice = pd.Timestamp(datetime.date(YEAR, 12, 21)).tz_localize(TIMEZONE)
+
+# ── Annotációs színséma – semleges slate, nem verseng az adatelemekkel ───────
+SOLSTICE_COLOR      = C_BASE["neutral_dk"]
+SOLSTICE_TEXT_COLOR = C_BASE["text_dk"]
+SOLSTICE_BG_COLOR   = C_BASE["bg_light"]
+
+fig, ax = plt.subplots(figsize=(14, 5.8), layout="constrained")
+
+# ── Napi termelés ─────────────────────────────────────────────────────────────
+ax.bar(daily_kwh.index, daily_kwh.values,
+       alpha=0.40, color=C_DAILY["ac"], width=0.95,
+       label="Napi termelés [kWh]")
+
+# ── 14 napos mozgóátlag – napforduló alapú színezés ──────────────────────────
+# Emelkedő félév: jan. 1. – jún. 21. (téli napfordulótól nyári napfordulóig)
+# Csökkenő félév: jún. 21. – dec. 21. (nyári napfordulótól téli napfordulóig)
+for i in range(1, len(rolling_14)):
+    if pd.isna(rolling_14.iloc[i]) or pd.isna(rolling_14.iloc[i - 1]):
+        continue
+    ts = rolling_14.index[i]
+    color = C_DAILY["rising"] if ts <= summer_solstice or ts >= winter_solstice \
+            else C_DAILY["falling"]
+    ax.plot(
+        [rolling_14.index[i - 1], rolling_14.index[i]],
+        [rolling_14.iloc[i - 1], rolling_14.iloc[i]],
+        color=color, linewidth=2.3, zorder=5)
+
+# ── Napfordulók – az emelkedő és csökkenő félév határai ──────────────────────
+solstices = [
+    (summer_solstice, "Nyári napforduló\n(jún. 21.)", "left",  -60),
+    (winter_solstice, "Téli napforduló\n(dec. 21.)",  "right",  60),
+]
+for ts, label, ha, x_offset in solstices:
+    ax.axvline(ts, color=SOLSTICE_COLOR, linestyle="--",
+               linewidth=1.8, alpha=0.85, zorder=3)
+    ax.annotate(
+        label,
+        xy=(ts, daily_kwh.max() * 1.10),
+        xytext=(x_offset, 0), textcoords="offset points",
+        ha=ha, va="center", fontsize=8.5,
+        color=SOLSTICE_TEXT_COLOR, fontweight="bold",
+        arrowprops=dict(arrowstyle="->", color=SOLSTICE_COLOR,
+                        lw=1.4, connectionstyle="arc3,rad=0.0"),
+        bbox=dict(boxstyle="round,pad=0.4", facecolor=SOLSTICE_BG_COLOR,
+                  edgecolor=SOLSTICE_COLOR, linewidth=1.2, alpha=0.95),
+        zorder=7)
+
+# ── Legend – proxy artistekkel a kétszínű mozgóátlaghoz ─────────────────────
+legend_elements = [
+    Line2D([0], [0], color=C_DAILY["ac"], alpha=0.6, linewidth=8,
+           label="Napi termelés [kWh]"),
+    Line2D([0], [0], color=C_DAILY["rising"], linewidth=2.3,
+           label="Mozgóátlag – emelkedő félév (jan–jún)"),
+    Line2D([0], [0], color=C_DAILY["falling"], linewidth=2.3,
+           label="Mozgóátlag – csökkenő félév (jún–dec)"),
+]
+ax.legend(handles=legend_elements, framealpha=0.88,
+          loc="upper left", fontsize=9)
+
+ax.set_ylabel("Napi termelés [kWh]")
+ax.set_title(
+    f"Napi AC energiatermelés – {YEAR}",
+    fontweight="bold", fontsize=12.5)
+ax.set_ylim(0, daily_kwh.max() * 1.18)
+ax.yaxis.grid(True, alpha=0.35, linestyle="--")
+ax.set_axisbelow(True)
+
+plt.show()
+
+=== CELL 26 ===
+import math
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.gridspec import GridSpec
+from config import LOCATION_NAME, YEAR, DETAILED_SYSTEM_LOSSES, GAMMA_PDC, TEMP_REF
+from pv_calculator import PDC0_TOTAL, PDC0_INV
+
+MONTH_HU = [
+    "Jan", "Feb", "Már", "Ápr", "Máj", "Jún",
+    "Júl", "Aug", "Sze", "Okt", "Nov", "Dec",
+]
+
+from config import C_WATERFALL, C_BASE, MPL_DEFAULTS
+plt.rcParams.update(MPL_DEFAULTS)
+
+PDC0_KWP    = PDC0_TOTAL / 1000
+derate_live = math.prod(1.0 - v for v in DETAILED_SYSTEM_LOSSES.values())
+
+# ── Óránkénti veszteségkomponensek (adatvezérelten, df_pv-ből) ──────────────
+p_ac_net_live = df_pv["p_ac"] * derate_live
+
+# STC DC potenciál: amit a rendszer 25 °C-on termelne (az oszlopok teteje)
+p_dc_stc = df_pv["poa_global"] / 1000 * PDC0_TOTAL
+
+# 1. Hőmérsékleti veszteség: STC DC és tényleges DC különbsége
+#    Téli hónapokban (temp_cell < TEMP_REF) ez negatív → 0-ra vágva (téli hőnyereség nem látható)
+temp_loss_h = (p_dc_stc - df_pv["p_dc"]).clip(lower=0)
+
+# 2. Clipping: p_dc > inverter névleges DC kapacitása (ILR=0.80 → várhatóan ~0)
+clipping_h = (df_pv["p_dc"] - PDC0_INV).clip(lower=0)
+
+# 3. Inverterveszteség: DC → AC konverziós veszteség
+inverter_loss_h = (df_pv["p_dc"] - clipping_h - df_pv["p_ac"]).clip(lower=0)
+
+# 4. Rendszerveszteség: p_ac → nettó AC (DETAILED_SYSTEM_LOSSES derate)
+system_loss_h = (df_pv["p_ac"] - p_ac_net_live).clip(lower=0)
+
+# ── Havi kWh összesítők ───────────────────────────────────────────────────────
+def _monthly_kwh(s):
+    return s.groupby(s.index.month).sum() / 1000
+
+monthly_kwh_real  = _monthly_kwh(p_ac_net_live)
+monthly_sys_loss  = _monthly_kwh(system_loss_h)
+monthly_inv_loss  = _monthly_kwh(inverter_loss_h)
+monthly_clipping  = _monthly_kwh(clipping_h)
+monthly_temp_loss = _monthly_kwh(temp_loss_h)
+
+# ── KPI mutatók ───────────────────────────────────────────────────────────────
+annual_kwh_real  = monthly_kwh_real.sum()
+annual_kwh_ideal = df_pv["p_ac"].sum() / 1000
+annual_total_loss_kwh = (monthly_sys_loss + monthly_inv_loss
+                         + monthly_clipping + monthly_temp_loss).sum()
+annual_stc_kwh        = annual_kwh_real + annual_total_loss_kwh
+annual_total_loss_pct = annual_total_loss_kwh / annual_stc_kwh * 100
+annual_h_poa     = df_pv["poa_global"].sum() / 1000
+annual_pr        = annual_kwh_real / (PDC0_KWP * annual_h_poa)
+
+kpi_data = [
+    ("Valós éves AC",     f"{annual_kwh_real:,.0f}".replace(",", " "), "kWh",       C_WATERFALL["ac"]),
+    ("Össz. veszteség",   f"{annual_total_loss_kwh:,.0f}".replace(",", " "),
+     f"{annual_total_loss_pct:.1f}%",                                                C_WATERFALL["loss"]),
+    ("Performance Ratio", f"{annual_pr:.3f}",                         "IEC 61724", C_WATERFALL["inv"]),
+]
+
+# ── Layout ─────────────────────────────────────────────────────────────────────
+fig = plt.figure(figsize=(13, 7.8))
+gs  = GridSpec(2, 3, figure=fig, height_ratios=[1, 3.2], hspace=0.35, wspace=0.22)
+
+for i, (label, value, unit, color) in enumerate(kpi_data):
+    ax_k = fig.add_subplot(gs[0, i])
+    ax_k.set_facecolor(C_BASE["bg_light"])
+    for sp in ax_k.spines.values():
+        sp.set_visible(False)
+    ax_k.set_xticks([]); ax_k.set_yticks([])
+    ax_k.text(0.5, 0.80, label, ha="center", va="center", fontsize=9.5,
+              fontweight="bold", color=C_BASE["neutral_dk"], transform=ax_k.transAxes)
+    ax_k.text(0.5, 0.46, value, ha="center", va="center", fontsize=24,
+              fontweight="bold", color=color,   transform=ax_k.transAxes)
+    ax_k.text(0.5, 0.16, unit,  ha="center", va="center", fontsize=10,
+              color=C_BASE["text_lt"],   transform=ax_k.transAxes)
+    ax_k.add_patch(plt.Rectangle(
+        (0.02, 0.05), 0.96, 0.92, transform=ax_k.transAxes,
+        fill=False, edgecolor=color, linewidth=2, alpha=0.55))
+
+# ── Havi stackelt barchart ─────────────────────────────────────────────────────
+# Szekvencia alulról felfelé: AC nettó → rendszerveszteség → inverter → clipping → hőmérséklet
+# Szín best practice: zöld (termelés), piros (rendszer), amber (elektromos), indigo (tervezési),
+# kék (fizikai/hőmérsékleti) – Tailwind CSS perceptuálisan kiegyensúlyozott paletta
+SEGMENTS = [
+    (monthly_kwh_real,  C_WATERFALL["ac"], "Valós AC (nettó)"),
+    (monthly_sys_loss,  C_WATERFALL["loss"], "Rendszerveszteség"),
+    (monthly_inv_loss,  C_WATERFALL["inv"], "Inverterveszteség"),
+    (monthly_clipping,  C_WATERFALL["clip"], "Clipping"),
+    (monthly_temp_loss, C_WATERFALL["temp"], "Hőm. veszteség (> 25 °C)"),
+]
+
+width = 0.72
+ax    = fig.add_subplot(gs[1, :])
+x     = np.arange(1, 13)
+
+bottoms = np.zeros(12)
+for data, color, label in SEGMENTS:
+    vals = data.values
+    bars = ax.bar(x, vals, width, bottom=bottoms,
+                  label=label, color=color, edgecolor="white", linewidth=0.6)
+    # Zöld szelvény: kWh felirat középre, fehér félkövér
+    if label == "Valós AC (nettó)":
+        for xi, (v, bot) in enumerate(zip(vals, bottoms)):
+            if v > 45:
+                ax.text(xi + 1, bot + v / 2, f"{v:.0f}",
+                        ha="center", va="center",
+                        fontsize=8.5, fontweight="bold", color="white")
+    bottoms = bottoms + vals
+
+# Összesített veszteség az oszlopok tetején (STC potenciálhoz képest)
+for xi, (top, real) in enumerate(zip(bottoms, monthly_kwh_real.values)):
+    total_loss = top - real
+    if total_loss > 5:
+        ax.text(xi + 1, top + 1.5, f"−{total_loss:.0f}",
+                ha="center", va="bottom", fontsize=7.5,
+                color=C_BASE["text_dk"], fontweight="bold")
+
+ax.set_xticks(x)
+ax.set_xticklabels(MONTH_HU)
+ax.set_ylabel("Havi termelés [kWh]")
+ax.set_title(
+    f"Havi AC energiatermelés – veszteségszerkezet az STC potenciálhoz képest ({LOCATION_NAME}, {YEAR})",
+    fontweight="bold", fontsize=12.5, pad=32)
+ax.yaxis.grid(True, alpha=0.35, linestyle="--")
+ax.set_axisbelow(True)
+ax.legend(frameon=True, facecolor=C_BASE["bg_light"], edgecolor=C_BASE["bg"],
+          framealpha=0.95, fontsize=9, ncols=5, loc="upper left",
+          handlelength=1.2, handletextpad=0.5, columnspacing=0.8)
+ax.text(0.0, 1.022,
+        "Az oszlopok feletti negatív értékek az össz. veszteségeket mutatják kWh-ban",
+        transform=ax.transAxes, fontsize=8, color=C_BASE["neutral_dk"], style="italic")
+ax.set_ylim(0, bottoms.max() * 1.30)
+
+
+=== CELL 28 ===
+import math
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+import matplotlib.cm as cm
+import matplotlib.colors as mcolors
+from matplotlib.patches import Rectangle
+from config import ETA_INV_NOM, ILR, YEAR, DETAILED_SYSTEM_LOSSES, C_LOSS, C_BASE
+from pv_calculator import PDC0_TOTAL, PDC0_INV
+
+# ── Számítások ────────────────────────────────────────────────────────────────
+PDC0_KWP       = PDC0_TOTAL / 1000
+E_dc_stc       = (df_pv["poa_global"].sum() / 1000) * PDC0_KWP
+E_dc_actual    = df_pv["p_dc"].sum() / 1000
+E_ac_actual    = df_pv["p_ac"].sum() / 1000
+loss_clipping  = (df_pv["p_dc"] - PDC0_INV).clip(lower=0).sum() / 1000 * ETA_INV_NOM
+loss_temp      = E_dc_stc - E_dc_actual
+loss_inverter  = E_dc_actual - E_ac_actual - loss_clipping
+E_ac_pre_clip  = E_ac_actual + loss_clipping
+derate_live    = math.prod(1.0 - v for v in DETAILED_SYSTEM_LOSSES.values())
+loss_system    = E_ac_actual * (1.0 - derate_live)
+E_ac_net       = E_ac_actual * derate_live
+total_eff      = E_ac_net / E_dc_stc * 100
+
+# ── Vízesés lépcsők (Felső diagram) ──────────────────────────────────────────
+
+top_steps = [
+    ("STC DC\npotenciál",      E_dc_stc,       "total",    C_LOSS["dc"]),
+    ("Hőmérs.\nveszteség",    -loss_temp,      "loss",     C_LOSS["loss"]),
+    ("Tényleges\nDC",          E_dc_actual,    "subtotal", C_LOSS["dc"]),
+    ("Inverter\nveszteség",   -loss_inverter,  "loss",     C_LOSS["loss"]),
+    ("AC\n(inverter ut.)",     E_ac_pre_clip,  "subtotal", C_LOSS["ac"]),
+    ("Clipping\nveszteség",   -loss_clipping,  "loss",     C_LOSS["loss"]),
+    ("Tényleges\nAC",          E_ac_actual,    "subtotal", C_LOSS["ac_actual"]),
+    ("Rendszer-\nveszteség",  -loss_system,    "loss",     C_LOSS["loss"]),
+    ("Nettó AC\n(hálózat)",    E_ac_net,       "final",    C_LOSS["ac"]),
+]
+
+LOSS_NAMES_HU = {
+    "soiling":      "Koszolódás",
+    "shading":      "Árnyékolás",
+    "mismatch":     "Modul-eltérés",
+    "wiring":       "DC kábelezés",
+    "connections":  "Csatlakozók",
+    "lid":          "LID (degradáció)",
+    "nameplate":    "Névleges elt.",
+    "availability": "Rendelkezésre állás",
+}
+
+# ==============================================================================
+# IoT/AI KUTATÁSI PROJEKT CÉLÉRTÉKEK: Mennyit tudunk szoftveresen megmenteni?
+# ==============================================================================
+AI_RECOVERY_RATES = {
+    "availability": 0.45,  # Az IoT riasztásokkal a leállási idő 45%-a megspórolható
+    "soiling":      0.25,  # Prediktív mosási menetrenddel 25% visszanyerhető
+    "mismatch":     0.15,  # Karbantartási anomália-detekcióval 15% javulás
+}
+
+# ── Középső panel: Teljes veszteségeloszlás adatvezérelt előkészítése ───────
+
+# 1. Alap veszteségek (Név, kWh érték, Fix szín, Típus, Eredeti kulcs)
+all_losses = []
+if loss_temp > 0:
+    all_losses.append(("Hőmérséklet", loss_temp, C_LOSS["temp"], "main", "temp"))
+if loss_inverter > 0:
+    all_losses.append(("Inverter", loss_inverter, C_LOSS["inv"], "main", "inverter"))
+if loss_clipping > 0:
+    all_losses.append(("Clipping", loss_clipping, C_LOSS["clip"], "main", "clipping"))
+
+# 2. Rendszerveszteség komponenseinek kaszkádos kiszámítása
+cur = E_ac_actual
+for key, pct in DETAILED_SYSTEM_LOSSES.items():
+    if pct > 0:
+        amt = cur * pct
+        all_losses.append((LOSS_NAMES_HU.get(key, key), amt, None, "system", key))
+        cur -= amt
+
+# 3. Teljes adatvezérelt rendezés: A legnagyobbtól a legkisebbig (Pareto-elv)
+all_losses_sorted = sorted(all_losses, key=lambda x: x[1], reverse=True)
+
+# 4. Burgundy gradient: legsötétebb = legnagyobb veszteség
+n_losses = len(all_losses_sorted)
+_burg_dark  = np.array(mcolors.to_rgba("#c5283d"))
+_burg_light = np.array(mcolors.to_rgba("#e9724c"))
+burg_colors = [
+    mcolors.to_hex((1 - t) * _burg_dark + t * _burg_light)
+    for t in np.linspace(0, 1, n_losses)
+]
+
+final_losses = [
+    (name, amt, burg_colors[i], ltype, key)
+    for i, (name, amt, _, ltype, key) in enumerate(all_losses_sorted)
+]
+
+total_losses_kwh = sum(amt for _, amt, _, _, _ in final_losses)
+total_ai_savings_kwh = sum(amt * AI_RECOVERY_RATES[key] for _, amt, _, _, key in final_losses if key in AI_RECOVERY_RATES)
+
+# ── Helper: vízesés geometria ────────────────────────────────────────────────
+def _wf_geom(steps):
+    bottoms, heights, running = [], [], 0.0
+    for _, val, kind, _ in steps:
+        if kind in ("total", "subtotal", "final"):
+            bottoms.append(0); heights.append(val); running = val
+        else:
+            bottoms.append(running + val); heights.append(-val); running += val
+    return np.array(bottoms), np.array(heights)
+
+# ── Figure ────────────────────────────────────────────────────────────────────
+fig = plt.figure(figsize=(16, 14), facecolor=C_BASE["bg_light"])
+fig.suptitle(
+    f"Energiaveszteségi elemzés és ML Optimalizációs Potenciál – Budapest Infopark {YEAR}",
+    fontsize=14, fontweight="bold", y=0.98, color=C_BASE["title"],
+)
+# 3 soros grid: Felső (vízesés), Középső (Pareto), Alsó (KPI kártyák)
+gs = gridspec.GridSpec(3, 2, figure=fig, height_ratios=[1.7, 1.3, 0.4], width_ratios=[1, 1],
+                       hspace=0.5, wspace=0.1, left=0.05, right=0.95, top=0.93, bottom=0.05)
+
+ax1 = fig.add_subplot(gs[0, :])
+ax2 = fig.add_subplot(gs[1, :])
+ax_kpi1 = fig.add_subplot(gs[2, 0])
+ax_kpi2 = fig.add_subplot(gs[2, 1])
+
+# ── Felső panel (Vízesés) ─────────────────────────────────────────────────────
+b1, h1 = _wf_geom(top_steps)
+x1 = np.arange(len(top_steps))
+y_max1 = E_dc_stc * 1.26
+
+ax1.bar(x1, h1, bottom=b1, color=[s[3] for s in top_steps],
+        edgecolor="white", linewidth=1.2, width=0.68, zorder=3)
+
+for i, (_, val, kind, color) in enumerate(top_steps):
+    if kind == "loss":
+        pct = abs(val) / E_dc_stc * 100
+        if h1[i] >= 0.048 * y_max1:
+            ax1.text(i, b1[i] + h1[i] / 2,
+                     f"\u2212{abs(val):,.0f}\nkWh\n({pct:.1f}%)".replace(",", "\u202f"),
+                     ha="center", va="center", color="white",
+                     fontweight="bold", fontsize=8.5, zorder=5)
+        else:
+            ax1.text(i, b1[i] + h1[i] + y_max1 * 0.012,
+                     f"\u2212{abs(val):,.0f} kWh ({pct:.1f}%)".replace(",", "\u202f"),
+                     ha="center", va="bottom", color=C_LOSS["loss"],
+                     fontweight="bold", fontsize=9, zorder=5)
+    else:
+        ax1.text(i, val + y_max1 * 0.012,
+                 f"{val:,.0f} kWh".replace(",", "\u202f"),
+                 ha="center", va="bottom", fontweight="bold",
+                 fontsize=9.5, color=color, zorder=5)
+
+for i in range(len(top_steps) - 1):
+    kind = top_steps[i][2]
+    y = (b1[i] + h1[i]) if kind in ("total", "subtotal") else b1[i]
+    ax1.plot([i + 0.34, i + 1 - 0.34], [y, y],
+             color=C_BASE["neutral"], lw=1.0, ls=":", zorder=2)
+
+ax1.set_xticks(x1)
+ax1.set_xticklabels([s[0] for s in top_steps], fontsize=9)
+ax1.set_ylabel("Energia [kWh/év]", fontsize=9)
+ax1.set_ylim(0, y_max1)
+ax1.set_title("Teljes konverziós lánc (STC DC potenciál → nettó AC)",
+              fontsize=11, fontweight="bold", pad=6, loc="left")
+ax1.yaxis.grid(True, alpha=0.28, ls="--")
+ax1.set_axisbelow(True)
+ax1.spines["top"].set_visible(False)
+ax1.spines["right"].set_visible(False)
+
+summary = (
+    f"Rendszer-hatásfok (STC DC → Nettó AC): {total_eff:.1f}%\n"
+    f"Hőmérs.: {loss_temp/E_dc_stc*100:.1f}%  │  "
+    f"Inverter: {loss_inverter/E_dc_stc*100:.1f}%  │  "
+    f"Clipping: {loss_clipping/E_dc_stc*100:.1f}%  │  "
+    f"Rendszer: {loss_system/E_dc_stc*100:.1f}%  │  "
+    f"ILR: {ILR:.2f}"
+)
+ax1.text(0.5, 0.97, summary, transform=ax1.transAxes,
+         fontsize=8.8, va="top", ha="center",
+         bbox=dict(boxstyle="round,pad=0.4", facecolor="white",
+                   edgecolor=C_BASE["neutral"], alpha=0.93))
+
+# ── Középső panel (Adatvezérelt Álló Oszlopgrafikon - AI predikcióval) ────────
+ax2.set_title("Minden energiaveszteség rangsora és az IoT/AI modellel visszanyerhető tartomány",
+              fontsize=11, fontweight="bold", pad=15, loc="left")
+
+x2 = np.arange(len(final_losses))
+amts = [item[1] for item in final_losses]
+colors = [item[2] for item in final_losses]
+names = [item[0] for item in final_losses]
+
+y_max2 = max(amts) * 1.25 if amts else 100
+
+# 1. Alap oszlopok kirajzolása (Teljes veszteség)
+bars = ax2.bar(x2, amts, color=colors, edgecolor="white", linewidth=1.2, width=0.68, zorder=3)
+
+# 2. Visszanyerhető energia réteg rajzolása és feliratozás
+for i, (name, amt, color, ltype, key) in enumerate(final_losses):
+    pct_of_stc = (amt / E_dc_stc) * 100
+    
+    # Ha a tétel optimalizálható az AI által
+    if key in AI_RECOVERY_RATES:
+        recovery_ratio = AI_RECOVERY_RATES[key]
+        recovered_amt = amt * recovery_ratio
+        
+        # Sraffozott rész rárajzolása az oszlop tetejére
+        ax2.bar(x2[i], recovered_amt, bottom=amt - recovered_amt, 
+                color="none", edgecolor=C_LOSS["recovery"], linewidth=2, hatch="////", width=0.68, zorder=4)
+        
+        ax2.text(i, amt - (recovered_amt / 2), f"+{recovered_amt:.0f} kWh", 
+                 ha="center", va="center", color="#FFFFFF", fontweight="bold", fontsize=8,
+                 zorder=6)
+
+    # Normál felirat az oszlop fölé
+    ax2.text(i, amt + (y_max2 * 0.02), 
+             f"{amt:,.0f} kWh\n({pct_of_stc:.2f}%)".replace(",", "\u202f"),
+             ha="center", va="bottom", color=C_BASE["text_dk"],
+             fontweight="bold", fontsize=9, zorder=5)
+
+ax2.set_xticks(x2)
+ax2.set_xticklabels(names, fontsize=9.5, rotation=0)
+ax2.set_ylabel("Energia [kWh/év]", fontsize=9)
+ax2.set_ylim(0, y_max2)
+ax2.yaxis.grid(True, alpha=0.28, ls="--")
+ax2.set_axisbelow(True)
+ax2.spines["top"].set_visible(False)
+ax2.spines["right"].set_visible(False)
+
+# Színmagyarázat (Legend)
+legend_elements = [
+    Rectangle((0,0), 1, 1, facecolor="none", edgecolor=C_LOSS["recovery"], hatch="////", label="AI/IoT modellel visszanyerhető energia"),
+    Rectangle((0,0), 1, 1, facecolor="#c5283d", edgecolor="none", label="Nagyobb veszteség (sötétebb)"),
+    Rectangle((0,0), 1, 1, facecolor="#e9724c", edgecolor="none", label="Kisebb veszteség (világosabb)"),
+]
+ax2.legend(handles=legend_elements, loc='upper right', frameon=True, facecolor="white", edgecolor=C_BASE["bg"], fontsize=9.5)
+
+
+# ── Alsó panel (KPI Kártyák) ──────────────────────────────────────────────────
+def create_kpi_card(ax, title, value, unit, color):
+    ax.set_facecolor("white")
+    ax.axis('off')
+    
+    # Kártya háttér és keret
+    rect = Rectangle((0, 0), 1, 1, transform=ax.transAxes, facecolor="white", edgecolor=C_BASE["bg"], linewidth=1.5)
+    ax.add_patch(rect)
+    
+    # Színes sáv bal oldalon
+    side_bar = Rectangle((0, 0), 0.04, 1, transform=ax.transAxes, facecolor=color, edgecolor="none")
+    ax.add_patch(side_bar)
+    
+    # Szövegek
+    ax.text(0.08, 0.7, title, ha="left", va="center", fontsize=11, fontweight="bold", color=C_BASE["neutral_dk"], transform=ax.transAxes)
+    ax.text(0.08, 0.35, f"{value:,.0f}".replace(",", " "), ha="left", va="center", fontsize=24, fontweight="bold", color=color, transform=ax.transAxes)
+    ax.text(0.4, 0.35, unit, ha="left", va="center", fontsize=11, color=C_BASE["text_lt"], transform=ax.transAxes)
+
+
+create_kpi_card(ax_kpi1, "Összes számított veszteség:", total_losses_kwh, "kWh / év", C_LOSS["loss"])
+create_kpi_card(ax_kpi2, "Predikciós modellel visszanyerhető:", total_ai_savings_kwh, "kWh / év", C_LOSS["recovery"])
+
+
+plt.show()
+
+# ── Szöveges összefoglaló ────────────────────────────────────────────────────
+_SEP = '\u2550' * 62
+print(f"\n{_SEP}")
+print(f"  IoT/AI PROJEKT ELŐREJELZÉS – {YEAR}")
+print(_SEP)
+print(f"  STC DC potenciál                         : {E_dc_stc:>8.1f} kWh")
+print(f"  Teljes veszteség                         : {total_losses_kwh:>8.1f} kWh")
+print(f"  Teljes várható AC termelés modell nélkül : {E_ac_net:>8.1f} kWh")
+print(f"  --------------------------------------------------------------")
+print(f"  AI optimalizációval visszanyerhető       : +{total_ai_savings_kwh:>7.1f} kWh")
+print(f"  Várható optimalizált hozam               : {E_ac_net + total_ai_savings_kwh:>8.1f} kWh")
+print(_SEP)
+
