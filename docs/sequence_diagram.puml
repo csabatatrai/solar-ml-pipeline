@@ -1,0 +1,202 @@
+@startuml Solar ML Pipeline – Szekvenciadiagram
+
+skinparam sequenceArrowThickness 2
+skinparam roundcorner 10
+skinparam maxmessagesize 90
+skinparam sequenceGroupBorderThickness 2
+skinparam sequenceGroupBorderColor #888888
+skinparam noteBackgroundColor #FFFDE7
+skinparam noteBorderColor #F9A825
+
+actor       Felhasználó             as user
+participant "analysis.ipynb"        as analysis
+participant "data_loader.py"        as loader
+participant "OpenMeteo\nArchive API" as archive_api  #LightBlue
+participant "pv_calculator.py"      as pvcalc
+participant "pvlib"                 as pvlib          #LightGreen
+database    "solar_data.duckdb"     as duckdb         #LightYellow
+participant "solar_ml_pipeline\n.ipynb" as mlnb
+participant "OpenMeteo\nForecast API"   as forecast_api  #LightCyan
+participant "Darts TFT Model"           as tft            #Plum
+
+' ════════════════════════════════════════════════════════════
+== 1. ETL – Időjárási adatok letöltése (2023–2025) ==
+' ════════════════════════════════════════════════════════════
+
+user -> analysis : Notebook futtatása
+activate analysis
+
+analysis -> loader : load_weather_data()
+activate loader
+
+loop minden évre (2023, 2024, 2025)
+  loader -> duckdb : SELECT COUNT(*) FROM weather_data\nWHERE year = ?
+  duckdb --> loader : meglévő sorok száma
+
+  alt adatok hiányoznak vagy force_reload=True
+    loader -> archive_api : GET /v1/archive\n(hourly: shortwave_radiation,\ndirect_normal_irradiance,\ndiffuse_radiation,\ntemperature_2m, windspeed_10m)
+    archive_api --> loader : JSON – 8 760 sor/év\n(ERA5 reanalízis)
+    loader -> loader : _build_dataframe()\n· negatív sugárzás → 0\n· tz_localize UTC → tz_convert Budapest
+    loader -> duckdb : INSERT INTO weather_data\nON CONFLICT DO NOTHING
+    duckdb --> loader : újonnan mentett sorok
+  else már naprakész
+    loader -> loader : letöltés kihagyva (idempotens)
+  end
+end
+
+loader --> analysis : total_inserted sorok száma
+deactivate loader
+
+' ════════════════════════════════════════════════════════════
+== 2. PV Fizikai Szimuláció (pvlib pipeline) ==
+' ════════════════════════════════════════════════════════════
+
+analysis -> pvcalc : run_pv_simulation()
+activate pvcalc
+
+pvcalc -> duckdb : SELECT COUNT(*) FROM pv_results\nWHERE p_ac_net IS NOT NULL
+duckdb --> pvcalc : kitöltött sorok száma
+
+alt sorok < 26 304 vagy force_reload=True
+  pvcalc -> duckdb : SELECT * FROM weather_data\nORDER BY timestamp
+  duckdb --> pvcalc : DataFrame – 26 304 sor\n(ghi, dni, dhi, temp_air, wind_speed)
+
+  pvcalc -> pvlib : get_solarposition(timestamps)\n[Location: Debrecen, 47.47°N 21.61°E, 121 m]
+  pvlib --> pvcalc : solar_zenith, solar_azimuth
+
+  pvcalc -> pvlib : get_total_irradiance()\n[haydavies szórásmodell, tilt=30°]
+  pvlib --> pvcalc : poa_global [W/m²]
+
+  pvcalc -> pvlib : pvsyst_cell(poa_global, temp_air, wind_speed)\n[Uc=28.77, eta_m=0.2202, NOCT=41°C]
+  pvlib --> pvcalc : temp_cell [°C]
+
+  pvcalc -> pvlib : pvwatts_dc(poa_global, temp_cell)\n[pdc0=4 300 W, gamma_pdc=−0.0030/°C]
+  pvlib --> pvcalc : p_dc [W]
+
+  pvcalc -> pvlib : inverter.pvwatts(p_dc)\n[pdc0_inv=3 000 W → clipping ILR=1.43]
+  pvlib --> pvcalc : p_ac [W]
+
+  pvcalc -> pvcalc : _enrich_with_system_losses()\n· derate_factor = ∏(1−loss)\n· deg_factor(year): −1% / −0.4%/év
+  note right of pvcalc
+    p_ac_net = p_ac × derate × deg_factor(év)
+    energy_loss_w = p_ac − p_ac_net
+  end note
+
+  pvcalc -> duckdb : INSERT INTO pv_results\n(timestamp, poa_global, temp_cell,\np_dc, p_ac, p_ac_net, energy_loss_w)
+  duckdb --> pvcalc : 26 304 sor mentve
+else már naprakész
+  pvcalc -> duckdb : SELECT * FROM pv_results
+  duckdb --> pvcalc : DataFrame (korai visszatérés)
+end
+
+pvcalc --> analysis : pv_results DataFrame
+deactivate pvcalc
+deactivate analysis
+
+' ════════════════════════════════════════════════════════════
+== 3. ML Pipeline – Adatelőkészítés ==
+' ════════════════════════════════════════════════════════════
+
+user -> mlnb : Notebook futtatása
+activate mlnb
+
+mlnb -> duckdb : SELECT w.timestamp, w.ghi, w.temp_air,\nw.wind_speed, r.p_ac\nFROM weather_data w\nJOIN pv_results r ON w.timestamp = r.timestamp
+duckdb --> mlnb : DataFrame – 26 304 sor
+
+mlnb -> mlnb : p_ac_net = p_ac × derate × deg_factor(év)\n(degradáció újraalkalmazva az ML notebook-ban)
+mlnb -> mlnb : Ciklikus időbeli feature-ök:\nsin/cos hour, sin/cos month
+mlnb -> mlnb : Darts TimeSeries konverzió\n(UTC-naív index, freq='h')
+mlnb -> mlnb : Train/Val/Test szétválasztás:\n· Train: 2023-01 – 2024-09\n· Val:   2024-10 – 2024-12\n· Test:  2025-01 – 2025-12
+mlnb -> mlnb : Scaler illesztés (csak train halmazon)\nMinMaxScaler (target) + StandardScaler (cov.)
+
+' ════════════════════════════════════════════════════════════
+== 4. TFT Modell Betöltése / Betanítása ==
+' ════════════════════════════════════════════════════════════
+
+alt checkpoint létezik és FORCE_RETRAIN=False
+  mlnb -> tft : TFTModel.load_from_checkpoint(\n  "solar_tft_model", best=True\n)
+  tft --> mlnb : betöltött modell (validációs loss minimum)
+else nincs checkpoint / FORCE_RETRAIN=True
+  mlnb -> tft : model.fit(\n  series=ts_train_scaled,\n  future_covariates=ts_future_train_scaled,\n  val_series=ts_val_scaled\n)
+  note right of tft
+    TFT hiperparaméterek:
+    input_chunk=168h (7 nap)
+    output_chunk=24h (day-ahead)
+    hidden_size=64, lstm_layers=2
+    n_epochs=20, QuantileRegression
+    Quantiles: P10 / P50 / P90
+  end note
+  tft --> mlnb : betanított modell\n(checkpoint mentve darts_logs/-ba)
+end
+
+' ════════════════════════════════════════════════════════════
+== 5. ERA5 Gördülő Day-Ahead Backtest (2025) ==
+' ════════════════════════════════════════════════════════════
+
+alt ERA5 backtest cache létezik (FORCE_BACKTEST=False)
+  mlnb -> mlnb : backtest_scaled.pkl betöltése
+else
+  mlnb -> tft : historical_forecasts(\n  start=2025-01-01,\n  forecast_horizon=24h, stride=24h,\n  future_covariates=ts_future_full_scaled\n)
+  note right of tft
+    365 × 24h ablak gördülő előrejelzés
+    Kovariáns: ERA5 archív időjárás
+    (tökéletes, utólag ismert adatok)
+  end note
+  tft --> mlnb : backtest_scaled – 365 db TimeSeries
+  mlnb -> mlnb : backtest_scaled.pkl cache mentése
+end
+
+mlnb -> mlnb : inverz skálázás → backtest (W)\np10_s / p50_s / p90_s kiszámítása\nRMSE (összes óra), MAPE (nappali > 5 W)
+
+' ════════════════════════════════════════════════════════════
+== 6. Forecast API – Életszerű Day-Ahead Kovariánsok ==
+' ════════════════════════════════════════════════════════════
+
+alt forecast kovariáns cache létezik (FORCE_FC=False)
+  mlnb -> mlnb : ts_future_fc_full_scaled.pkl betöltése
+else
+  mlnb -> forecast_api : GET /v1/forecast\n(2024-12-31 – 2025-12-31,\nua. változók mint ERA5)
+  note right of forecast_api
+    historical-forecast-api.open-meteo.com
+    Tárolt valódi NWP futások eredményei
+    → életszerű day-ahead előrejelzési hiba
+  end note
+  forecast_api --> mlnb : JSON – eltárolt NWP előrejelzések
+
+  mlnb -> mlnb : sin/cos feature-ök helyi időből számítva\n(UTC-naív Darts-kompatibilis index)
+  mlnb -> mlnb : Hibrid sorozat összeállítása:\n[archive 2023-2024] ++ [forecast 2025]
+  mlnb -> mlnb : ts_future_fc_full_scaled.pkl cache mentése
+end
+
+' ════════════════════════════════════════════════════════════
+== 7. Forecast API Gördülő Backtest (2025) ==
+' ════════════════════════════════════════════════════════════
+
+alt forecast backtest cache létezik (FORCE_FC_BACKTEST=False)
+  mlnb -> mlnb : backtest_fc_scaled.pkl betöltése
+else
+  mlnb -> tft : historical_forecasts(\n  start=2025-01-01,\n  future_covariates=ts_future_fc_full_scaled\n)
+  note right of tft
+    Ugyanaz a betanított modell
+    Kovariáns: valódi NWP előrejelzés
+    → realisztikus teljesítménymérés
+  end note
+  tft --> mlnb : _bt_fc_scaled – 365 db TimeSeries
+  mlnb -> mlnb : backtest_fc_scaled.pkl cache mentése
+end
+
+mlnb -> mlnb : inverz skálázás → p50_fc_s\nRMSE_fc, MAPE_fc számítása
+
+' ════════════════════════════════════════════════════════════
+== 8. Vizualizáció ==
+' ════════════════════════════════════════════════════════════
+
+mlnb -> mlnb : Véletlen hét (P10 / P50 / P90 sávok)\n[4.11. ábra]
+mlnb -> mlnb : Hónap × Óra átlagos profil hőtérkép\n(tényleges / P50 / hiba – 3 panel)\n[4.13. ábra]
+mlnb -> mlnb : Naptár hőtérkép 1/2\nERA5 Reanalízis – ideális bemenet\n(p50_s, RMSE, MAPE)\n[4.12. ábra – 1. hőtérkép]
+mlnb -> mlnb : Naptár hőtérkép 2/2\nForecast API – életszerű day-ahead\n(p50_fc_s, RMSE_fc, MAPE_fc)\n[4.12. ábra – 2. hőtérkép]
+
+mlnb --> user : Vizualizációk + összehasonlító metrikák\nERA5 vs Forecast API (RMSE / MAPE)
+deactivate mlnb
+
+@enduml
