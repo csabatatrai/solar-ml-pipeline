@@ -24,12 +24,27 @@ import requests
 from config import (
     LATITUDE,
     LONGITUDE,
-    YEAR,
+    START_DATE,
+    END_DATE,
     TIMEZONE,
     DB_PATH,
     API_BASE_URL as OPENMETEO_URL,
     API_COLUMN_MAP as VARIABLE_MAP,
 )
+
+# ---------------------------------------------------------------------------
+# Multi-év logika (a config START_DATE / END_DATE alapján)
+# ---------------------------------------------------------------------------
+
+_START_YEAR = int(START_DATE[:4])   # 2023
+_END_YEAR   = int(END_DATE[:4])     # 2025
+ALL_YEARS   = list(range(_START_YEAR, _END_YEAR + 1))  # [2023, 2024, 2025]
+
+
+def expected_rows(year: int) -> int:
+    """Évi várt óránkénti sorok száma – szökőév-tudatos."""
+    leap = year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+    return (366 if leap else 365) * 24
 
 MAX_RETRIES: int = 3
 RETRY_DELAY_S: float = 5.0
@@ -81,7 +96,7 @@ def init_db(db_path: str = DB_PATH) -> duckdb.DuckDBPyConnection:
 def _fetch_openmeteo(
     latitude: float = LATITUDE,
     longitude: float = LONGITUDE,
-    year: int = YEAR,
+    year: int = _START_YEAR,
     timezone: str = TIMEZONE,
 ) -> dict:
     """
@@ -185,14 +200,15 @@ def _build_dataframe(raw: dict, timezone: str = TIMEZONE) -> pd.DataFrame:
     else:
         log.info("Nincs NaN érték – adatminőség rendben.")
 
-    expected_rows = 365 * 24
-    if len(df) != expected_rows:
+    actual_year    = df.index[0].year
+    exp_rows       = expected_rows(actual_year)
+    if len(df) != exp_rows:
         log.warning(
             "Várt sorok: %d, kapott sorok: %d – hiányzó vagy dupla adatok lehetségesek.",
-            expected_rows, len(df),
+            exp_rows, len(df),
         )
     else:
-        log.info("Sorok száma: %d (teljes 2023-as év, óránkénti) – OK", len(df))
+        log.info("Sorok száma: %d (teljes %d. év, óránkénti) – OK", len(df), actual_year)
 
     return df[["ghi", "dni", "dhi", "temp_air", "wind_speed"]]
 
@@ -241,39 +257,41 @@ def load_weather_data(
     force_reload: bool = False,
 ) -> int:
     """
-    Fő ETL belépési pont. Letölti az OpenMeteo adatokat és elmenti DuckDB-be.
-
-    Ha az adatbázisban már van 8760 sor és force_reload=False, az API hívást
-    kihagyja (idempotens futtatás).
-
-    Parameters
-    ----------
-    db_path : str
-        DuckDB adatbázisfájl elérési útja.
-    force_reload : bool
-        Ha True, az API hívás és írás megtörténik akkor is, ha az adatok
-        már léteznek.
+    Fő ETL belépési pont. Évenként tölti le a START_DATE–END_DATE időszakot és
+    menti DuckDB-be. Idempotens: ha egy év adatai már megvannak és
+    force_reload=False, az API-hívás elmarad.
 
     Returns
     -------
     int
-        Beírt sorok száma (0, ha már léteztek az adatok).
+        Összes újonnan beírt sorok száma.
     """
+    total_inserted = 0
+
     with duckdb.connect(db_path) as con:
         con.execute(_WEATHER_DDL)
-        count = con.execute("SELECT COUNT(*) FROM weather_data").fetchone()[0]
 
-        if not force_reload and count >= 8760:
-            log.info(
-                "Az adatbázisban már %d sor van – letöltés kihagyva "
-                "(force_reload=True-val kényszeríthető újra).",
-                count,
-            )
-            return 0
+        for year in ALL_YEARS:
+            exp = expected_rows(year)
+            count = con.execute(
+                "SELECT COUNT(*) FROM weather_data "
+                "WHERE timestamp >= ? AND timestamp < ?",
+                (f"{year}-01-01", f"{year + 1}-01-01"),
+            ).fetchone()[0]
 
-        raw = _fetch_openmeteo()
-        df = _build_dataframe(raw)
-        return _write_to_db(df, con)
+            if not force_reload and count >= exp:
+                log.info(
+                    "%d. év: már %d sor van – letöltés kihagyva "
+                    "(force_reload=True-val kényszeríthető újra).",
+                    year, count,
+                )
+                continue
+
+            raw = _fetch_openmeteo(year=year)
+            df  = _build_dataframe(raw)
+            total_inserted += _write_to_db(df, con)
+
+    return total_inserted
 
 
 def get_weather_dataframe(db_path: str = DB_PATH) -> pd.DataFrame:

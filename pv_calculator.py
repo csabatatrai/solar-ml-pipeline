@@ -30,6 +30,7 @@ from config import (
     LONGITUDE,
     ALTITUDE,
     TIMEZONE,
+    LOCATION_NAME,
     DB_PATH,
     SURFACE_TILT,
     SURFACE_AZIMUTH,
@@ -45,8 +46,13 @@ from config import (
     ETA_INV_REF,
     POA_MODEL,
     DETAILED_SYSTEM_LOSSES,
+    DEGRADATION_YEAR1,
+    DEGRADATION_ANNUAL,
+    SIMULATION_BASE_YEAR,
 )
-from data_loader import get_weather_dataframe
+from data_loader import get_weather_dataframe, ALL_YEARS, expected_rows
+
+_EXPECTED_TOTAL_ROWS = sum(expected_rows(y) for y in ALL_YEARS)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -62,13 +68,20 @@ log = logging.getLogger(__name__)
 
 _PV_DDL = """
     CREATE TABLE IF NOT EXISTS pv_results (
-        timestamp  TIMESTAMPTZ PRIMARY KEY,
-        poa_global DOUBLE,
-        temp_cell  DOUBLE,
-        p_dc       DOUBLE,
-        p_ac       DOUBLE
+        timestamp     TIMESTAMPTZ PRIMARY KEY,
+        poa_global    DOUBLE,
+        temp_cell     DOUBLE,
+        p_dc          DOUBLE,
+        p_ac          DOUBLE,
+        p_ac_net      DOUBLE,
+        energy_loss_w DOUBLE
     )
 """
+
+_PV_MIGRATE = [
+    "ALTER TABLE pv_results ADD COLUMN IF NOT EXISTS p_ac_net DOUBLE",
+    "ALTER TABLE pv_results ADD COLUMN IF NOT EXISTS energy_loss_w DOUBLE",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -90,7 +103,7 @@ def _compute_solar_position(df: pd.DataFrame) -> pd.DataFrame:
         longitude=LONGITUDE,
         tz=TIMEZONE,
         altitude=ALTITUDE,
-        name="Budapest Infopark",
+        name=LOCATION_NAME,
     )
     solar_pos = location.get_solarposition(df.index)
     df = df.copy()
@@ -179,7 +192,7 @@ def _compute_dc_power(df: pd.DataFrame) -> pd.DataFrame:
     """
     df = df.copy()
     df["p_dc"] = pvlib.pvsystem.pvwatts_dc(
-        g_poa_effective=df["poa_global"],
+        effective_irradiance=df["poa_global"],
         temp_cell=df["temp_cell"],
         pdc0=PDC0_TOTAL,
         gamma_pdc=GAMMA_PDC,
@@ -233,14 +246,34 @@ def _compute_ac_power(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _degradation_factor(year: int) -> float:
+    """Kumulatív degradációs szorzó az adott évre (Jinko Tiger Neo adatlap)."""
+    years_elapsed = max(0, year - SIMULATION_BASE_YEAR)
+    return (1.0 - DEGRADATION_YEAR1) * ((1.0 - DEGRADATION_ANNUAL) ** years_elapsed)
+
+
 def _enrich_with_system_losses(df: pd.DataFrame) -> pd.DataFrame:
-    """Multiplikatív rendszer-veszteség alkalmazása a pvlib AC kimenetre."""
+    """Multiplikatív rendszer-veszteség + éves degradáció alkalmazása a pvlib AC kimenetre."""
     df = df.copy()
     derate_factor = math.prod(1.0 - loss for loss in DETAILED_SYSTEM_LOSSES.values())
-    df["p_ac_net"]     = df["p_ac"] * derate_factor
+
+    years = df.index.year
+    deg_factors = pd.Series(
+        [_degradation_factor(y) for y in years], index=df.index, dtype=float
+    )
+    total_factor = derate_factor * deg_factors
+
+    df["p_ac_net"]      = df["p_ac"] * total_factor
     df["energy_loss_w"] = df["p_ac"] - df["p_ac_net"]
+
+    for yr in sorted(years.unique()):
+        f = _degradation_factor(yr)
+        log.info(
+            "  Degradációs faktor %d: %.5f (rendszerveszteséggel együtt: %.5f)",
+            yr, f, derate_factor * f,
+        )
     log.info(
-        "Rendszer-veszteség alkalmazva: derate factor = %.4f, residual loss = %.2f%%",
+        "Rendszer-veszteség + degradáció alkalmazva: alap derate = %.4f (%.2f%% veszteség)",
         derate_factor,
         (1.0 - derate_factor) * 100.0,
     )
@@ -252,27 +285,45 @@ def _enrich_with_system_losses(df: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 
-def _write_pv_results(df: pd.DataFrame, con: duckdb.DuckDBPyConnection) -> int:
+def _write_pv_results(
+    df: pd.DataFrame,
+    con: duckdb.DuckDBPyConnection,
+    truncate_first: bool = False,
+) -> int:
     """
     A pv_results DataFrame sorait idempotens módon írja az adatbázisba.
 
     DuckDB Replacement Scan: a lokális `pv_flat` változóra hivatkozik SQL-ből.
 
+    Parameters
+    ----------
+    truncate_first : bool
+        Ha True, a tábla tartalmát először törli (force_reload esetén).
+
     Returns
     -------
     int
-        Újonnan beírt sorok száma.
+        Beírt sorok száma.
     """
-    count_before = con.execute("SELECT COUNT(*) FROM pv_results").fetchone()[0]
+    if truncate_first:
+        con.execute("DELETE FROM pv_results")
+        log.info("pv_results tábla törölve (force_reload).")
 
-    pv_flat = df[["poa_global", "temp_cell", "p_dc", "p_ac"]].reset_index()  # noqa: F841
-    con.execute(
-        "INSERT INTO pv_results SELECT * FROM pv_flat ON CONFLICT DO NOTHING"
-    )
+    pv_flat = df[  # noqa: F841
+        ["poa_global", "temp_cell", "p_dc", "p_ac", "p_ac_net", "energy_loss_w"]
+    ].reset_index()
 
-    inserted = con.execute("SELECT COUNT(*) FROM pv_results").fetchone()[0] - count_before
-    if inserted:
-        log.info("%d új sor beírva a pv_results táblába.", inserted)
+    con.execute("""
+        INSERT INTO pv_results
+            (timestamp, poa_global, temp_cell, p_dc, p_ac, p_ac_net, energy_loss_w)
+        SELECT timestamp, poa_global, temp_cell, p_dc, p_ac, p_ac_net, energy_loss_w
+        FROM pv_flat
+        ON CONFLICT DO NOTHING
+    """)
+
+    inserted = con.execute("SELECT COUNT(*) FROM pv_results").fetchone()[0]
+    if truncate_first or inserted:
+        log.info("%d sor beírva a pv_results táblába.", inserted)
     else:
         log.info("Nincs új adat – a pv_results tábla már naprakész.")
     return inserted
@@ -307,23 +358,30 @@ def run_pv_simulation(
         A teljes eredménytábla (poa_global, temp_cell, p_dc, p_ac),
         timezone-aware DatetimeIndex-szel.
     """
-    # Init + early-exit check in a short-lived write connection.
+    # Init + migration + early-exit check.
     # The connection is always closed before any read_only open to avoid
     # DuckDB's "different configuration" conflict.
     with duckdb.connect(db_path) as con:
         con.execute(_PV_DDL)
+        for stmt in _PV_MIGRATE:
+            con.execute(stmt)
         count = con.execute("SELECT COUNT(*) FROM pv_results").fetchone()[0]
+        filled = con.execute(
+            "SELECT COUNT(*) FROM pv_results WHERE p_ac_net IS NOT NULL"
+        ).fetchone()[0]
 
-    if not force_reload and count >= 8760:
+    needs_run = force_reload or count < _EXPECTED_TOTAL_ROWS or filled < _EXPECTED_TOTAL_ROWS
+
+    if not needs_run:
         log.info(
-            "A pv_results táblában már %d sor van – számítás kihagyva "
-            "(force_reload=True-val kényszeríthető újra).",
+            "A pv_results táblában már %d sor van (p_ac_net kitöltve: %d) – "
+            "számítás kihagyva (force_reload=True-val kényszeríthető újra).",
             count,
+            filled,
         )
         return get_pv_dataframe(db_path)
 
     log.info("PV szimuláció indítása...")
-    # Load weather data with read_only connection (write con already closed).
     df = get_weather_dataframe(db_path)
     df = _compute_solar_position(df)
     df = _compute_poa_irradiance(df)
@@ -333,7 +391,7 @@ def run_pv_simulation(
     df = _enrich_with_system_losses(df)
 
     with duckdb.connect(db_path) as con:
-        _write_pv_results(df, con)
+        _write_pv_results(df, con, truncate_first=force_reload)
 
     return df[["poa_global", "temp_cell", "p_dc", "p_ac", "p_ac_net", "energy_loss_w"]]
 
@@ -353,7 +411,7 @@ def get_pv_dataframe(db_path: str = DB_PATH) -> pd.DataFrame:
     """
     with duckdb.connect(db_path, read_only=True) as con:
         df = con.execute(
-            "SELECT timestamp, poa_global, temp_cell, p_dc, p_ac "
+            "SELECT timestamp, poa_global, temp_cell, p_dc, p_ac, p_ac_net, energy_loss_w "
             "FROM pv_results ORDER BY timestamp"
         ).df()
 
@@ -365,7 +423,7 @@ def get_pv_dataframe(db_path: str = DB_PATH) -> pd.DataFrame:
     df["timestamp"] = df["timestamp"].dt.tz_convert(TIMEZONE)
     df = df.set_index("timestamp")
 
-    if "p_ac_net" not in df.columns or "energy_loss_w" not in df.columns:
+    if df["p_ac_net"].isna().any():
         df = _enrich_with_system_losses(df)
 
     log.info(

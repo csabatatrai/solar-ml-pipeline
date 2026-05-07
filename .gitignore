@@ -32,6 +32,3 @@ Thumbs.db
 
 # Exportált notebook kimenet, nem verziókezelt artifact!!!
 *.html
-
-# A titkos recept
-Claude.md
