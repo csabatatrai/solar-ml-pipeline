@@ -29,6 +29,3 @@ ENV/
 # Operációs rendszer fájlok
 .DS_Store
 Thumbs.db
-
-# Exportált notebook kimenet, nem verziókezelt artifact!!!
-*.html
